@@ -48,6 +48,87 @@ check_status() {
     fi
 }
 
+get_pid_file() {
+    echo "$LOG_DIR/mihomo.pid"
+}
+
+find_runtime_pids() {
+    local pid_file pid pids
+
+    pid_file="$(get_pid_file)"
+
+    # 1) 优先读 pidfile
+    if [ -f "$pid_file" ]; then
+        pid="$(tr -cd '0-9' < "$pid_file")"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "$pid"
+            return 0
+        fi
+    fi
+
+    # 2) 再按进程名匹配
+    pids="$(pgrep -f 'mihomo-linux|mihomo|clash-linux' 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+    if [ -n "$pids" ]; then
+        echo "$pids"
+        return 0
+    fi
+
+    # 3) 最后按监听端口反查 PID
+    if command -v lsof >/dev/null 2>&1; then
+        pids="$(lsof -tiTCP:"$PROXY_PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+        if [ -n "$pids" ]; then
+            echo "$pids"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+is_listening() {
+    local port="$1"
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -lnt "( sport = :$port )" 2>/dev/null | tail -n +2 | grep -q .
+        return $?
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+        return $?
+    fi
+
+    return 1
+}
+
+get_controller_probe_host() {
+    local addr="${CONTROLLER_ADDR:-127.0.0.1:${CONTROLLER_PORT}}"
+    local host
+
+    if [[ "$addr" =~ ^\[(.*)\]:(.*)$ ]]; then
+        host="${BASH_REMATCH[1]}"
+    elif [[ "$addr" == *:* ]]; then
+        host="${addr%:*}"
+    else
+        host="$addr"
+    fi
+
+    case "$host" in
+        0.0.0.0|::|"")
+            host="127.0.0.1"
+            ;;
+    esac
+
+    echo "$host"
+}
+
+controller_ok() {
+    local host code
+    host="$(get_controller_probe_host)"
+    code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${host}:${CONTROLLER_PORT}/version" || true)"
+    [ "$code" = "200" ]
+}
+
 sanitize_port() {
     local port="$1"
     if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -gt 0 ] && [ "$port" -le 65535 ]; then
@@ -92,6 +173,12 @@ resolve_ports() {
 
 resolve_ports
 
+RUNTIME_PIDS=""
+PROXY_LISTENING=0
+CONTROLLER_LISTENING=0
+CONTROLLER_OK=0
+PROXY_REQUEST_OK=0
+
 LOG_FILE="$LOG_DIR/mihomo.log"
 if [ ! -f "$LOG_FILE" ]; then
     LOG_FILE="$LOG_DIR/clash.log"
@@ -104,11 +191,14 @@ echo ""
 
 # 1. 检查 Clash 进程
 echo "1. 检查 Clash 进程状态"
-if pgrep -f "clash-linux-amd64\|mihomo" > /dev/null; then
-    PID=$(pgrep -f "clash-linux-amd64\|mihomo" | tr '\n' ' ')
-    check_status "进程状态" "PASS" "Clash/Mihomo 正在运行 (PID: $PID)"
+RUNTIME_PIDS="$(find_runtime_pids || true)"
+
+if [ -n "$RUNTIME_PIDS" ]; then
+    check_status "进程状态" "PASS" "Mihomo/Clash 正在运行 (PID: $RUNTIME_PIDS)"
+elif controller_ok; then
+    check_status "进程状态" "WARN" "控制接口可用，但未通过进程名规则匹配到 PID，说明进程检测规则过窄或 pidfile 缺失"
 else
-    check_status "进程状态" "FAIL" "Clash/Mihomo 进程未运行"
+    check_status "进程状态" "FAIL" "未检测到 Mihomo/Clash 运行态"
 fi
 echo ""
 
@@ -116,14 +206,16 @@ echo ""
 echo "2. 检查端口监听状态"
 check_status "当前端口口径" "PASS" "代理端口=${PROXY_PORT}，控制端口=${CONTROLLER_PORT} (external-controller=${CONTROLLER_ADDR})"
 
-if lsof -i :"$PROXY_PORT" > /dev/null 2>&1; then
+if is_listening "$PROXY_PORT"; then
     check_status "代理端口 (${PROXY_PORT})" "PASS" "端口正在监听"
+    PROXY_LISTENING=1
 else
     check_status "代理端口 (${PROXY_PORT})" "FAIL" "端口未监听"
 fi
 
-if lsof -i :"$CONTROLLER_PORT" > /dev/null 2>&1; then
+if is_listening "$CONTROLLER_PORT"; then
     check_status "控制端口 (${CONTROLLER_PORT})" "PASS" "端口正在监听"
+    CONTROLLER_LISTENING=1
 else
     check_status "控制端口 (${CONTROLLER_PORT})" "FAIL" "端口未监听"
 fi
@@ -195,11 +287,13 @@ echo ""
 
 # 5. 网络与控制接口测试
 echo "5. 网络与控制接口测试"
-VERSION_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:${CONTROLLER_PORT}/version")
-if [ "$VERSION_HTTP_CODE" -eq 200 ]; then
+CONTROLLER_HOST="$(get_controller_probe_host)"
+VERSION_HTTP_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${CONTROLLER_HOST}:${CONTROLLER_PORT}/version" || true)"
+if [ "$VERSION_HTTP_CODE" = "200" ]; then
     check_status "控制接口 (/version)" "PASS" "控制接口可访问"
+    CONTROLLER_OK=1
 
-    GLOBAL_NOW=$(curl -s --max-time 5 "http://127.0.0.1:${CONTROLLER_PORT}/proxies/GLOBAL" | (
+    GLOBAL_NOW=$(curl -s --max-time 5 "http://${CONTROLLER_HOST}:${CONTROLLER_PORT}/proxies/GLOBAL" | (
         if [ -x "$YQ_BIN" ]; then
             "$YQ_BIN" eval '.now' - 2>/dev/null
         elif command -v yq >/dev/null 2>&1; then
@@ -216,7 +310,7 @@ if [ "$VERSION_HTTP_CODE" -eq 200 ]; then
         check_status "策略组 GLOBAL" "WARN" "无法读取 GLOBAL 当前策略（可能需要 Secret）"
     fi
 else
-    if pgrep -f "clash-linux-amd64\|mihomo" > /dev/null; then
+    if [ -n "$RUNTIME_PIDS" ]; then
         check_status "控制接口 (/version)" "FAIL" "进程存在但 controller 不可用，请检查 external-controller 配置和日志"
     else
         check_status "控制接口 (/version)" "FAIL" "controller 不可用，且进程未运行"
@@ -225,6 +319,7 @@ fi
 
 if curl -s -x "http://127.0.0.1:${PROXY_PORT}" -m 5 http://www.google.com > /dev/null 2>&1; then
     check_status "代理连接 (Google)" "PASS" "可以通过代理访问"
+    PROXY_REQUEST_OK=1
 else
     check_status "代理连接 (Google)" "FAIL" "无法通过代理访问"
 fi
@@ -277,7 +372,7 @@ if [ "$ERRORS" -gt 0 ] || [ "$WARNINGS" -gt 0 ]; then
     echo "建议修复以下问题："
     echo ""
 
-    if ! pgrep -f "clash-linux-amd64\|mihomo" > /dev/null; then
+    if [ -z "$RUNTIME_PIDS" ] && [ "$CONTROLLER_OK" -ne 1 ] && [ "$PROXY_LISTENING" -ne 1 ] && [ "$PROXY_REQUEST_OK" -ne 1 ]; then
         echo "1. 启动 Clash 服务："
         echo "   cd $SERVER_DIR && source ./start.sh"
         echo ""
