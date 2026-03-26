@@ -347,16 +347,6 @@ if_success() {
 # 清除变量
 unset http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY
 
-# 从 .bashrc 中删除函数和相关行
-functions_to_remove=("proxy_on" "proxy_off" "shutdown_system")
-for func in "${functions_to_remove[@]}"; do
-  sed -i -E "/^function[[:space:]]+${func}[[:space:]]*()/,/^}$/d" ~/.bashrc
-done
-
-# 删除相关行
-sed -i '/^# 开启系统代理/d; /^# 关闭系统代理/d; /^# 关闭系统函数/d; /^# 检查clash进程是否正常启动/d; /proxy_on/d; /^#.*proxy_on/d' ~/.bashrc
-sed -i '/^$/N;/^\n$/D' ~/.bashrc
-
 # 确保logs,conf,bin目录存在
 [[ ! -d "$Log_Dir" ]] && mkdir -p $Log_Dir
 [[ ! -d "$Conf_Dir" ]] && mkdir -p $Conf_Dir
@@ -513,7 +503,8 @@ fi
 if [[ $Status -eq 0 ]]; then
     # Output Dashboard access address and Secret
     echo ''
-    echo -e "Clash 控制面板访问地址: http://<your_ip>:6006/ui"
+    echo -e "Clash 控制面板访问地址: http://127.0.0.1:9090/ui"
+    echo -e "如需远程访问，请自行做 SSH/VSCode 端口转发 9090"
     echo ''
 fi
 
@@ -522,12 +513,28 @@ fi
 #==============================================================
 # 获取Clash端口（如果yq可用）
 if [ -x "$YQ_BINARY" ]; then
-    CLASH_PORT=$($YQ_BINARY eval '.port' $Config_File 2>/dev/null || echo "7890")
+    CLASH_PORT=$($YQ_BINARY eval '."mixed-port"' $Config_File 2>/dev/null)
+    if [[ -z "$CLASH_PORT" || "$CLASH_PORT" == "null" ]]; then
+        CLASH_PORT=$($YQ_BINARY eval '.port' $Config_File 2>/dev/null)
+    fi
+    if [[ -z "$CLASH_PORT" || "$CLASH_PORT" == "null" ]]; then
+        CLASH_PORT="7890"
+    fi
 else
     CLASH_PORT="7890"  # 默认端口
 fi
 
 if [[ $Status -eq 0 ]]; then
+    # 从 .bashrc 中删除函数和相关行
+    functions_to_remove=("proxy_on" "proxy_off" "shutdown_system")
+    for func in "${functions_to_remove[@]}"; do
+      sed -i -E "/^function[[:space:]]+${func}[[:space:]]*()/,/^}$/d" ~/.bashrc
+    done
+
+    # 删除相关行
+    sed -i '/^# 开启系统代理/d; /^# 关闭系统代理/d; /^# 关闭系统函数/d; /^# 检查clash进程是否正常启动/d; /proxy_on/d; /^#.*proxy_on/d' ~/.bashrc
+    sed -i '/^$/N;/^\n$/D' ~/.bashrc
+
     # 定义要添加的函数内容
     cat << EOF > /tmp/clash_functions_template
 # 开启系统代理
