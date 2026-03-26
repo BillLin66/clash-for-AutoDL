@@ -143,8 +143,9 @@ if [ -f "$CONFIG_FILE" ]; then
             fi
 
             PROXY_COUNT=$("$YQ_CMD" eval '.proxies | length' "$CONFIG_FILE" 2>/dev/null || echo "0")
-            PROXY_COUNT="$(sanitize_port "$PROXY_COUNT")"
-            [ -z "$PROXY_COUNT" ] && PROXY_COUNT=0
+            if ! printf '%s\n' "$PROXY_COUNT" | grep -Eq '^[0-9]+$'; then
+                PROXY_COUNT=0
+            fi
         else
             check_status "配置文件语法" "WARN" "无法检查 YAML 语法 (yq 未安装)"
             if grep -q "^proxies:" "$CONFIG_FILE"; then
