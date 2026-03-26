@@ -688,10 +688,18 @@ fi
 # 添加 curl 测试
 echo "正在测试网络连接..."
 
-if curl -s --max-time 5 "http://127.0.0.1:${ACTUAL_CONTROLLER_PORT}/version" | grep -q '{'; then
-    echo -e "${GREEN}控制接口检测成功: 127.0.0.1:${ACTUAL_CONTROLLER_PORT}/version${NC}"
+# 根据实际绑定地址选择探测主机，处理 0.0.0.0/:: 的情况
+PROBE_HOST="${ACTUAL_CONTROLLER_ADDR:-127.0.0.1}"
+case "$PROBE_HOST" in
+    0.0.0.0|::)
+        PROBE_HOST="127.0.0.1"
+        ;;
+esac
+
+if curl -s --max-time 5 "http://${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version" | grep -q '{'; then
+    echo -e "${GREEN}控制接口检测成功: ${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version${NC}"
 else
-    echo -e "${RED}控制接口检测失败: 127.0.0.1:${ACTUAL_CONTROLLER_PORT}/version${NC}"
+    echo -e "${RED}控制接口检测失败: ${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version${NC}"
     echo -e "${YELLOW}请检查日志文件: $Log_Dir/mihomo.log (若使用 clash 内核可查看 $Log_Dir/clash.log)${NC}"
 fi
 
