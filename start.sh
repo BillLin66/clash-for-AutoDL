@@ -627,9 +627,9 @@ function shutdown_system() {
 }
 EOF
 
-    # 使用 envsubst 替换变量
+    # 使用 envsubst 替换变量（限制替换范围，保留 $is_quiet 字面量）
     if command -v envsubst &> /dev/null; then
-        envsubst < /tmp/clash_functions_template > /tmp/clash_functions
+        envsubst '${GREEN} ${NC} ${CLASH_PORT} ${RED} ${Server_Dir}' < /tmp/clash_functions_template > /tmp/clash_functions
     else
         # 纯bash实现变量替换，不依赖envsubst
         eval "cat << EOF
@@ -688,10 +688,18 @@ fi
 # 添加 curl 测试
 echo "正在测试网络连接..."
 
-# 根据实际绑定地址选择探测主机，处理 0.0.0.0/:: 的情况
-PROBE_HOST="${ACTUAL_CONTROLLER_ADDR:-127.0.0.1}"
+# 根据实际绑定地址选择探测主机，处理 host:port 与 0.0.0.0/:: 的情况
+PROBE_ADDR="${ACTUAL_CONTROLLER_ADDR:-127.0.0.1:${ACTUAL_CONTROLLER_PORT}}"
+if [[ "$PROBE_ADDR" =~ ^\[(.*)\]:(.*)$ ]]; then
+    PROBE_HOST="${BASH_REMATCH[1]}"
+elif [[ "$PROBE_ADDR" == *:* ]]; then
+    PROBE_HOST="${PROBE_ADDR%:*}"
+else
+    PROBE_HOST="$PROBE_ADDR"
+fi
+
 case "$PROBE_HOST" in
-    0.0.0.0|::)
+    0.0.0.0|::|"")
         PROBE_HOST="127.0.0.1"
         ;;
 esac
