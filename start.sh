@@ -696,10 +696,11 @@ case "$PROBE_HOST" in
         ;;
 esac
 
-if curl -s --max-time 5 "http://${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version" | grep -q '{'; then
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version")
+if [ "$HTTP_CODE" -eq 200 ] 2>/dev/null; then
     echo -e "${GREEN}控制接口检测成功: ${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version${NC}"
 else
-    echo -e "${RED}控制接口检测失败: ${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version${NC}"
+    echo -e "${RED}控制接口检测失败: ${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version (HTTP 状态码: ${HTTP_CODE})${NC}"
     echo -e "${YELLOW}请检查日志文件: $Log_Dir/mihomo.log (若使用 clash 内核可查看 $Log_Dir/clash.log)${NC}"
 fi
 
