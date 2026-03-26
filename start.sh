@@ -525,7 +525,7 @@ if [ -f "$TEMPLATE_FILE" ]; then
     if [ -x "$YQ_BINARY" ]; then
         $YQ_BINARY -n "load(\"$Config_File\") * load(\"$TEMPLATE_FILE\")" > $MERGED_FILE
         mv $MERGED_FILE $Config_File
-        $YQ_BINARY eval --inplace ".secret = \"$Secret\"" "$Config_File"
+        YQ_SECRET="$Secret" "$YQ_BINARY" eval --inplace '.secret = strenv(YQ_SECRET)' "$Config_File"
     else
         echo -e "${RED}yq binary不可执行，跳过配置文件合并${NC}"
     fi
