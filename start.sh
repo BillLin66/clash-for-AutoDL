@@ -57,6 +57,9 @@ RETRY_DELAY=5
 # Clash 配置
 TEMPLATE_FILE="$Conf_Dir/template.yaml"
 MERGED_FILE="$Conf_Dir/merged.yaml"
+ACTUAL_PROXY_PORT="7890"
+ACTUAL_CONTROLLER_PORT="9090"
+ACTUAL_CONTROLLER_ADDR="127.0.0.1:9090"
 
 # GitHub镜像站点列表（按优先级排序）
 # 修改镜像站点列表，将 ghfast.top 放在前面
@@ -226,6 +229,63 @@ download_github_file() {
     
     echo -e "${RED}✗ 所有镜像站点都下载失败: $description${NC}"
     return 1
+}
+
+sanitize_port() {
+    local port="$1"
+    if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -gt 0 ] && [ "$port" -le 65535 ]; then
+        echo "$port"
+    else
+        echo ""
+    fi
+}
+
+parse_controller_port() {
+    local controller="$1"
+    local extracted_port
+
+    if [ -z "$controller" ] || [ "$controller" = "null" ]; then
+        echo "9090"
+        return
+    fi
+
+    extracted_port="${controller##*:}"
+    extracted_port="$(sanitize_port "$extracted_port")"
+    if [ -n "$extracted_port" ]; then
+        echo "$extracted_port"
+    else
+        echo "9090"
+    fi
+}
+
+resolve_runtime_ports() {
+    local mixed_port=""
+    local port=""
+    local controller=""
+
+    if [ -x "$YQ_BINARY" ] && [ -f "$Config_File" ]; then
+        mixed_port="$($YQ_BINARY eval '.["mixed-port"]' "$Config_File" 2>/dev/null || true)"
+        port="$($YQ_BINARY eval '.port' "$Config_File" 2>/dev/null || true)"
+        controller="$($YQ_BINARY eval '.["external-controller"]' "$Config_File" 2>/dev/null || true)"
+    fi
+
+    mixed_port="$(sanitize_port "$mixed_port")"
+    port="$(sanitize_port "$port")"
+
+    if [ -n "$mixed_port" ]; then
+        ACTUAL_PROXY_PORT="$mixed_port"
+    elif [ -n "$port" ]; then
+        ACTUAL_PROXY_PORT="$port"
+    else
+        ACTUAL_PROXY_PORT="7890"
+    fi
+
+    if [ -z "$controller" ] || [ "$controller" = "null" ]; then
+        ACTUAL_CONTROLLER_ADDR="127.0.0.1:9090"
+    else
+        ACTUAL_CONTROLLER_ADDR="$controller"
+    fi
+    ACTUAL_CONTROLLER_PORT="$(parse_controller_port "$ACTUAL_CONTROLLER_ADDR")"
 }
 
 # 下载mihomo二进制文件
@@ -465,12 +525,15 @@ if [ -f "$TEMPLATE_FILE" ]; then
     if [ -x "$YQ_BINARY" ]; then
         $YQ_BINARY -n "load(\"$Config_File\") * load(\"$TEMPLATE_FILE\")" > $MERGED_FILE
         mv $MERGED_FILE $Config_File
+        YQ_SECRET="$Secret" "$YQ_BINARY" eval --inplace '.secret = strenv(YQ_SECRET)' "$Config_File"
     else
         echo -e "${RED}yq binary不可执行，跳过配置文件合并${NC}"
     fi
 else
     echo -e "${YELLOW}模板文件不存在，跳过配置文件合并${NC}"
 fi
+
+resolve_runtime_ports
 
 # CPU架构已在前面检测，此处无需重复检测
 
@@ -513,19 +576,19 @@ fi
 if [[ $Status -eq 0 ]]; then
     # Output Dashboard access address and Secret
     echo ''
-    echo -e "Clash 控制面板访问地址: http://<your_ip>:6006/ui"
+    echo -e "Clash 控制面板访问地址: http://${ACTUAL_CONTROLLER_ADDR}/ui"
+    if [ "$ACTUAL_CONTROLLER_ADDR" = "127.0.0.1:9090" ]; then
+        echo -e "${YELLOW}控制面板默认仅本地监听 (127.0.0.1)。${NC}"
+        echo -e "${YELLOW}访问路径为 /ui；若通过 SSH/VSCode 转发，请转发端口 9090。${NC}"
+    fi
+    echo -e "Secret: $Secret"
     echo ''
 fi
 
 #==============================================================
 # 自定义命令注入
 #==============================================================
-# 获取Clash端口（如果yq可用）
-if [ -x "$YQ_BINARY" ]; then
-    CLASH_PORT=$($YQ_BINARY eval '.port' $Config_File 2>/dev/null || echo "7890")
-else
-    CLASH_PORT="7890"  # 默认端口
-fi
+CLASH_PORT="$ACTUAL_PROXY_PORT"
 
 if [[ $Status -eq 0 ]]; then
     # 定义要添加的函数内容
@@ -541,7 +604,7 @@ function proxy_on() {
     export HTTPS_PROXY=http://127.0.0.1:$CLASH_PORT
     export NO_PROXY=127.0.0.1,localhost
     
-    if [ #is_quiet != "true" ]; then
+    if [ "\$is_quiet" != "true" ]; then
         echo -e "${GREEN}[√] 已开启代理${NC}"
     fi
 }
@@ -552,7 +615,7 @@ function proxy_off() {
     
     unset http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY
 
-    if [ #is_quiet != "true" ]; then
+    if [ "\$is_quiet" != "true" ]; then
         echo -e "${RED}[×] 已关闭代理${NC}"
     fi
 }
@@ -564,18 +627,15 @@ function shutdown_system() {
 }
 EOF
 
-    # 使用 envsubst 替换变量
+    # 使用 envsubst 替换变量（限制替换范围，保留 $is_quiet 字面量）
     if command -v envsubst &> /dev/null; then
-        envsubst < /tmp/clash_functions_template > /tmp/clash_functions
+        envsubst '${GREEN} ${NC} ${CLASH_PORT} ${RED} ${Server_Dir}' < /tmp/clash_functions_template > /tmp/clash_functions
     else
         # 纯bash实现变量替换，不依赖envsubst
         eval "cat << EOF
 $(cat /tmp/clash_functions_template)
 EOF" > /tmp/clash_functions
     fi
-
-    # 在临时函数文件中将 #is_quiet 替换为 $is_quiet
-    sed -i 's/#is_quiet/$is_quiet/g' /tmp/clash_functions
 
     # 将函数追加到 .bashrc
     cat /tmp/clash_functions >> ~/.bashrc
@@ -588,20 +648,36 @@ EOF" > /tmp/clash_functions
     echo -e "若要临时关闭系统代理，请执行: proxy_off"
     echo -e "若需要彻底删除，请调用: shutdown_system"
 
-    # 询问用户是否要自动添加 proxy_on 命令
-    read -p "是否要在 .bashrc 中自动添加 proxy_on 命令？(y/n): " auto_proxy
-    if [[ $auto_proxy == "y" || $auto_proxy == "Y" ]]; then
+    auto_proxy_enabled=false
+    if [ "${AUTO_PROXY_ON:-}" = "yes" ]; then
         echo "proxy_on" >> ~/.bashrc
-        echo "已在 .bashrc 中添加自动执行 proxy_on 命令。"
+        echo "AUTO_PROXY_ON=yes，已自动添加 proxy_on 到 .bashrc。"
         auto_proxy_enabled=true
+    elif [ "${AUTO_PROXY_ON:-}" = "no" ]; then
+        echo "AUTO_PROXY_ON=no，未自动添加 proxy_on 到 .bashrc。"
     else
-        echo ""
-        echo "未添加自动执行 proxy_on 命令，您可以手动执行该命令来启用代理。"
-        auto_proxy_enabled=false
+        if [ -t 0 ]; then
+            read -p "是否要在 .bashrc 中自动添加 proxy_on 命令？(y/n): " auto_proxy
+            if [[ $auto_proxy == "y" || $auto_proxy == "Y" ]]; then
+                echo "proxy_on" >> ~/.bashrc
+                echo "已在 .bashrc 中添加自动执行 proxy_on 命令。"
+                auto_proxy_enabled=true
+            else
+                echo ""
+                echo "未添加自动执行 proxy_on 命令，您可以手动执行该命令来启用代理。"
+            fi
+        else
+            echo "检测到非交互终端，默认不自动添加 proxy_on 到 .bashrc。"
+        fi
     fi
 
     # 重新加载 .bashrc
     source ~/.bashrc
+
+    if echo "${http_proxy}${https_proxy}" | grep -q ":null"; then
+        echo -e "${RED}检测到代理环境变量包含 :null，请重新执行 start.sh${NC}"
+        Status=1
+    fi
 fi
 
 # 如果是第一次运行或用户拒绝自动添加，此变量可能未设置
@@ -611,6 +687,30 @@ fi
 
 # 添加 curl 测试
 echo "正在测试网络连接..."
+
+# 根据实际绑定地址选择探测主机，处理 host:port 与 0.0.0.0/:: 的情况
+PROBE_ADDR="${ACTUAL_CONTROLLER_ADDR:-127.0.0.1:${ACTUAL_CONTROLLER_PORT}}"
+if [[ "$PROBE_ADDR" =~ ^\[(.*)\]:(.*)$ ]]; then
+    PROBE_HOST="${BASH_REMATCH[1]}"
+elif [[ "$PROBE_ADDR" == *:* ]]; then
+    PROBE_HOST="${PROBE_ADDR%:*}"
+else
+    PROBE_HOST="$PROBE_ADDR"
+fi
+
+case "$PROBE_HOST" in
+    0.0.0.0|::|"")
+        PROBE_HOST="127.0.0.1"
+        ;;
+esac
+
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version")
+if [ "$HTTP_CODE" -eq 200 ] 2>/dev/null; then
+    echo -e "${GREEN}控制接口检测成功: ${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version${NC}"
+else
+    echo -e "${RED}控制接口检测失败: ${PROBE_HOST}:${ACTUAL_CONTROLLER_PORT}/version (HTTP 状态码: ${HTTP_CODE})${NC}"
+    echo -e "${YELLOW}请检查日志文件: $Log_Dir/mihomo.log (若使用 clash 内核可查看 $Log_Dir/clash.log)${NC}"
+fi
 
 # 如果不是自动设置代理，则手动开启代理
 is_quiet_mode=true
@@ -628,7 +728,8 @@ fi
 if curl -s -o /dev/null -w "%{http_code}" google.com | grep -qE '^[0-9]+$'; then
     echo -e "${GREEN}网络连接测试成功。${NC}"
 else
-    echo -e "${RED}网络连接测试失败。请检查您的网络和 Clash 配置。${NC}"
+    echo -e "${RED}网络连接测试失败。${NC}"
+    echo -e "${YELLOW}请检查策略组是否仍然指向 DIRECT，可在 Dashboard/API 中手动切换。${NC}"
 fi
 
 # 如果不是自动设置代理，则手动关闭代理

@@ -73,7 +73,7 @@ vim .env
 
 ![3.png](https://s2.loli.net/2024/06/20/S4t8ZlVjiOKuo7n.png)
 
-> **注意：** `.env` 文件中的变量 `CLASH_SECRET` 为自定义 Clash Secret，值为空时，脚本将自动生成随机字符串。
+> **注意：** `.env` 文件中的变量 `CLASH_SECRET` 为自定义 Clash Secret；若留空，`start.sh` 会自动生成随机字符串并写入 `conf/config.yaml`。
 
 <br>
 
@@ -109,7 +109,7 @@ source ./start.sh
 正在启动Clash服务...
 服务启动成功！                                             [  OK  ]
 
-Clash 控制面板访问地址: http://<your_ip>:6006/ui
+Clash 控制面板访问地址: http://<your_ip>:9090/ui
 Secret: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 已添加代理函数到 .bashrc。
@@ -122,18 +122,21 @@ Secret: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 网络连接测试成功。
 ```
 
+> 默认端口口径（与 `conf/template.yaml` 一致）：
+> - 代理端口：`7890`（`mixed-port`）
+> - 控制端口：`9090`（`external-controller`）
+> - Dashboard UI 路径：`/ui`
+
 ![6.png](https://s2.loli.net/2024/06/20/txmaFbIAQpY2nES.png)
 
 
 - 检查服务端口
 
 ```bash
-lsof -i -P -n | grep LISTEN | grep -E ':6006|:789[0-9]'
+lsof -i -P -n | grep LISTEN | grep -E ':7890|:9090'
 
-tcp        0      0 127.0.0.1:6006          0.0.0.0:*               LISTEN     
+tcp        0      0 127.0.0.1:9090          0.0.0.0:*               LISTEN     
 tcp6       0      0 :::7890                 :::*                    LISTEN     
-tcp6       0      0 :::7891                 :::*                    LISTEN     
-tcp6       0      0 :::7892                 :::*                    LISTEN
 ```
 
 ![7.png](https://s2.loli.net/2024/06/20/WMVzH431c8gARPw.png)
@@ -183,16 +186,16 @@ SSH端口转发是最简单直接的方式，无需安装额外软件。
 1. 在本地终端（不是AutoDL服务器）运行以下命令：
 
 ```bash
-ssh -L 6006:localhost:6006 username@autodl_server_ip
+ssh -L 9090:localhost:9090 username@autodl_server_ip
 ```
 
 其中：
 - `username` 是你的AutoDL用户名
 - `autodl_server_ip` 是你的AutoDL服务器IP地址
 
-2. 保持SSH连接，在本地浏览器访问：`http://localhost:6006/ui`
+2. 保持SSH连接，在本地浏览器访问：`http://localhost:9090/ui`
 
-3. 在`API Base URL`中输入：`http://localhost:6006`，在`Secret(optional)`中输入启动时显示的Secret
+3. 在`API Base URL`中输入：`http://localhost:9090`，在`Secret(optional)`中输入启动时显示的Secret
 
 ### 方案二：VSCode 端口转发（推荐）
 
@@ -201,7 +204,7 @@ ssh -L 6006:localhost:6006 username@autodl_server_ip
 1. 在VSCode中连接到AutoDL服务器
 2. 打开终端，确保Clash服务正在运行
 3. 在VSCode左侧找到"端口"面板（如果没有显示，按`Ctrl+Shift+P`，搜索"Forward a Port"）
-4. 点击"+"添加端口转发，输入`6006`
+4. 点击"+"添加端口转发，输入`9090`
 5. VSCode会自动创建端口转发，点击生成的本地地址即可访问Dashboard
 
 ### 方案三：ngrok 内网穿透（备用）
@@ -232,11 +235,11 @@ curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trust
 
 - 映射端口
 
-打开新的shell，运行下面的命令，映射6006端口：
+打开新的shell，运行下面的命令，映射9090端口：
 
 ```bash
 proxy_off
-ngrok http 6006
+ngrok http 9090
 ```
 
 ![14.png](https://s2.loli.net/2024/06/20/FYJ4Bx37ovcemKt.png)
@@ -283,10 +286,10 @@ bash health_check.sh
 该脚本会自动检查以下项目：
 
 1. **Clash 进程状态** - 检查 Clash 是否正在运行
-2. **端口监听状态** - 检查代理端口（7890、7891、7892）和控制面板端口（6006）
+2. **端口监听状态** - 检查当前配置中的代理端口（默认 7890）和控制端口（默认 9090）
 3. **配置文件** - 检查 config.yaml 语法和代理节点配置
 4. **环境变量** - 检查代理环境变量和订阅地址配置
-5. **网络连接测试** - 测试是否能通过代理访问 Google 和 GitHub
+5. **网络连接测试** - 测试是否能通过代理访问 Google，并检查控制端 `/version` 接口及 GLOBAL 策略的连通性
 6. **日志文件** - 检查最近的错误日志
 7. **安全检查** - 检查敏感文件和 Git 追踪状态
 
@@ -301,10 +304,8 @@ Clash for AutoDL 健康检查
 [✓] 进程状态: Clash 正在运行 (PID: 12345)
 
 2. 检查端口监听状态
-[✓] HTTP/SOCKS5代理端口 (7890): 端口正在监听
-[✓] HTTP代理端口 (7891): 端口正在监听
-[✓] SOCKS5代理端口 (7892): 端口正在监听
-[✓] 控制面板端口 (6006): 端口正在监听
+[✓] 代理端口 (7890): 端口正在监听
+[✓] 控制端口 (9090): 端口正在监听
 
 ...
 
@@ -344,6 +345,21 @@ Clash for AutoDL 健康检查
 3. 程序日志中出现`error: unsupported rule type RULE-SET`报错，解决方法查看官方[WIKI](https://github.com/Dreamacro/clash/wiki/FAQ#error-unsupported-rule-type-rule-set)
 
 4. 由于独享IP和带宽的价格昂贵，AutoDL平台采用同地区的实例共享带宽方案，不对实例的网络带宽和流量进行单独计费。一个地区的带宽约为1~2Gbps，上下行带宽相等。因此，有些同学反应安装的时候下载速度太慢了。建议避开高峰时段，考虑在早上或者晚上的时段进行下载，以提高下载速度。
+
+5. 代理端口可以连通，但请求返回 502，或者 `http_proxy/https_proxy` 变成了 `127.0.0.1:null` 怎么办？
+
+   建议按顺序排查：
+   - 先检查环境变量：`env | grep -i proxy`，确认没有 `:null`
+   - 再检查控制接口：`curl -s http://127.0.0.1:9090/version`
+   - 再检查 Dashboard/API 中策略组（如 `GLOBAL`）是否仍为 `DIRECT`
+
+   仅在你确认需要切换策略组时，可使用 API 示例（不会自动执行）：
+
+   ```bash
+   curl -sX PUT http://127.0.0.1:9090/proxies/GLOBAL \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"AI专用"}'
+   ```
 
 <details>
 <summary>更新日志</summary>
