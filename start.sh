@@ -30,7 +30,6 @@ Status=0  # 脚本运行状态，默认为0，表示成功
 Server_Dir="$( cd "$( dirname "$(readlink -f "${BASH_SOURCE[0]}")" )" && pwd )"
 Conf_Dir="$Server_Dir/conf"
 Log_Dir="$Server_Dir/logs"
-PID_FILE="$Log_Dir/mihomo.pid"
 
 # 注入配置文件里面的变量
 source $Server_Dir/.env
@@ -289,74 +288,6 @@ resolve_runtime_ports() {
     ACTUAL_CONTROLLER_PORT="$(parse_controller_port "$ACTUAL_CONTROLLER_ADDR")"
 }
 
-get_probe_host() {
-    local addr="${ACTUAL_CONTROLLER_ADDR:-127.0.0.1:${ACTUAL_CONTROLLER_PORT}}"
-    local host
-
-    if [[ "$addr" =~ ^\[(.*)\]:(.*)$ ]]; then
-        host="${BASH_REMATCH[1]}"
-    elif [[ "$addr" == *:* ]]; then
-        host="${addr%:*}"
-    else
-        host="$addr"
-    fi
-
-    case "$host" in
-        0.0.0.0|::|"")
-            host="127.0.0.1"
-            ;;
-    esac
-
-    echo "$host"
-}
-
-wait_for_mihomo_ready() {
-    local pid="$1"
-    local host probe_host code i
-
-    host="$(get_probe_host)"
-    probe_host="$host"
-    if [[ "$probe_host" == *:* ]] && [[ ! "$probe_host" =~ ^\[.*\]$ ]]; then
-        probe_host="[${probe_host}]"
-    fi
-
-    for i in $(seq 1 15); do
-        if ! kill -0 "$pid" 2>/dev/null; then
-            return 1
-        fi
-
-        code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://${probe_host}:${ACTUAL_CONTROLLER_PORT}/version" || true)"
-        if [ "$code" = "200" ]; then
-            return 0
-        fi
-
-        sleep 1
-    done
-
-    return 1
-}
-
-cleanup_old_runtime() {
-    local pids pid
-
-    if [ -f "$PID_FILE" ]; then
-        pid="$(tr -cd '0-9' < "$PID_FILE")"
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null || true
-            sleep 1
-            kill -9 "$pid" 2>/dev/null || true
-        fi
-        rm -f "$PID_FILE"
-    fi
-
-    pids="$(pgrep -f 'mihomo-linux|mihomo|clash-linux' 2>/dev/null || true)"
-    if [ -n "$pids" ]; then
-        kill $pids 2>/dev/null || true
-        sleep 1
-        kill -9 $pids 2>/dev/null || true
-    fi
-}
-
 # 下载mihomo二进制文件
 download_clash() {
     local arch=$1
@@ -494,6 +425,7 @@ sed -i '/^$/N;/^\n$/D' ~/.bashrc
 # 删除可能存在的转换文件和合并文件
 [[ -f "$Conf_Dir/config.yaml.converted" ]] && rm -f "$Conf_Dir/config.yaml.converted"
 [[ -f "$Conf_Dir/merged.yaml" ]] && rm -f "$Conf_Dir/merged.yaml"
+[[ -f "$Log_Dir/mihomo.log" ]] && rm -f "$Log_Dir/mihomo.log"
 
 #==============================================================
 # CPU架构检测（提前到依赖安装之前）
@@ -530,8 +462,11 @@ if ! check_converter_script; then
     exit 1
 fi
 
-# 清理旧进程与 pidfile
-cleanup_old_runtime
+# 检测mihomo进程是否存在，存在则要先杀掉，不存在就正常执行
+pids=$(pgrep -f "mihomo-linux")
+if [ -n "$pids" ]; then
+    kill $pids &>/dev/null
+fi
 
 #==============================================================
 # 配置文件检查与下载
@@ -614,32 +549,28 @@ if [[ $Status -eq 0 ]]; then
     if [[ $CpuArch =~ "x86_64" || $CpuArch =~ "amd64"  ]]; then
         mihomo_bin="$Server_Dir/bin/mihomo-linux-amd64"
         [[ ! -f "$mihomo_bin" ]] && download_clash "amd64"
+        nohup "$mihomo_bin" -d "$Conf_Dir" > "$Log_Dir/mihomo.log" 2>&1 </dev/null &
+        disown
+        ReturnStatus=$?
+        if_success $Text5 $Text6 $ReturnStatus
     elif [[ $CpuArch =~ "aarch64" ||  $CpuArch =~ "arm64" ]]; then
         mihomo_bin="$Server_Dir/bin/mihomo-linux-arm64"
         [[ ! -f "$mihomo_bin" ]] && download_clash "arm64"
+        nohup "$mihomo_bin" -d "$Conf_Dir" > "$Log_Dir/mihomo.log" 2>&1 </dev/null &
+        disown
+        ReturnStatus=$?
+        if_success $Text5 $Text6 $ReturnStatus
     elif [[ $CpuArch =~ "armv7" ]]; then
         mihomo_bin="$Server_Dir/bin/mihomo-linux-armv7"
         [[ ! -f "$mihomo_bin" ]] && download_clash "armv7"
+        nohup "$mihomo_bin" -d "$Conf_Dir" > "$Log_Dir/mihomo.log" 2>&1 </dev/null &
+        disown
+        ReturnStatus=$?
+        if_success $Text5 $Text6 $ReturnStatus
     else
         echo -e "${RED}\n[ERROR] Unsupported CPU Architecture！${NC}"
         exit 1
     fi
-
-    nohup "$mihomo_bin" -d "$Conf_Dir" > "$Log_Dir/mihomo.log" 2>&1 </dev/null &
-    MIHOMO_PID=$!
-    echo "$MIHOMO_PID" > "$PID_FILE"
-    disown
-
-    if wait_for_mihomo_ready "$MIHOMO_PID"; then
-        ReturnStatus=0
-    else
-        ReturnStatus=1
-        echo -e "${RED}Mihomo 未在预期时间内就绪${NC}"
-        echo -e "${YELLOW}最近 50 行日志如下:${NC}"
-        tail -n 50 "$Log_Dir/mihomo.log" 2>/dev/null || true
-    fi
-
-    if_success $Text5 $Text6 $ReturnStatus
 fi
 
 if [[ $Status -eq 0 ]]; then
@@ -740,7 +671,8 @@ EOF" > /tmp/clash_functions
         fi
     fi
 
-    echo -e "${YELLOW}已更新 ~/.bashrc，请手动执行 'source ~/.bashrc' 或打开新 shell 生效。${NC}"
+    # 重新加载 .bashrc
+    source ~/.bashrc
 
     if echo "${http_proxy}${https_proxy}" | grep -q ":null"; then
         echo -e "${RED}检测到代理环境变量包含 :null，请重新执行 start.sh${NC}"

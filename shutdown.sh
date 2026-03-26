@@ -2,8 +2,6 @@
 
 # 获取脚本工作目录绝对路径
 export Server_Dir=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)
-Log_Dir="$Server_Dir/logs"
-PID_FILE="$Log_Dir/mihomo.pid"
 
 # 关闭监视模式,不再报告后台作业状态
 set +m
@@ -57,45 +55,23 @@ safe_remove() {
   fi
 }
 
-collect_runtime_pids() {
-  local pid pids
-
-  if [ -f "$PID_FILE" ]; then
-    pid="$(tr -cd '0-9' < "$PID_FILE")"
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      echo "$pid"
-      return 0
-    fi
-  fi
-
-  pids="$(pgrep -f 'mihomo-linux|mihomo|clash-linux' 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
-  if [ -n "$pids" ]; then
-    echo "$pids"
-    return 0
-  fi
-
-  return 1
-}
-
 # 主要操作
 
 # 关闭clash服务
-Text1="clash/mihomo 进程关闭成功！"
-Text2="clash/mihomo 进程关闭失败！"
-PIDS="$(collect_runtime_pids || true)"
+Text1="clash进程关闭成功！"
+Text2="clash进程关闭失败！"
+PID_NUM=$(ps -ef | grep [c]lash-linux | wc -l)
+PID=$(ps -ef | grep [c]lash-linux | sed -n 's/^[^ ]* *\([^ ]*\).*/\1/p')
 ReturnStatus=0
-if [ -n "$PIDS" ]; then
-  kill $PIDS 2>/dev/null || ReturnStatus=$?
-  sleep 1
-  if pgrep -f 'mihomo-linux|mihomo|clash-linux' >/dev/null 2>&1; then
-    kill -9 $PIDS 2>/dev/null || true
-  fi
+if [ "$PID_NUM" -ne 0 ]; then
+  kill "$PID" &>/dev/null
+  ReturnStatus=$?
 fi
-rm -f "$PID_FILE"
 if_success "$Text1" "$Text2" "$ReturnStatus"
 
 # 定义路径变量
 Conf_Dir="$Server_Dir/conf"
+Log_Dir="$Server_Dir/logs"
 
 # 删除配置文件和日志
 safe_remove "$Conf_Dir/config.yaml"
