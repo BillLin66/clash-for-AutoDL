@@ -60,8 +60,8 @@ safe_remove() {
 # 关闭clash服务
 Text1="clash进程关闭成功！"
 Text2="clash进程关闭失败！"
-PID_NUM=$(ps -ef | grep [c]lash-linux | wc -l)
-PID=$(ps -ef | grep [c]lash-linux | sed -n 's/^[^ ]* *\([^ ]*\).*/\1/p')
+PID=$(pgrep -f "mihomo-linux|clash-linux")
+PID_NUM=$(echo "$PID" | sed '/^$/d' | wc -l)
 ReturnStatus=0
 if [ "$PID_NUM" -ne 0 ]; then
   kill "$PID" &>/dev/null
