@@ -197,7 +197,15 @@ echo "5. 网络与控制接口测试"
 if curl -s --max-time 5 "http://127.0.0.1:${CONTROLLER_PORT}/version" | grep -q '{'; then
     check_status "控制接口 (/version)" "PASS" "控制接口可访问"
 
-    GLOBAL_NOW=$(curl -s --max-time 5 "http://127.0.0.1:${CONTROLLER_PORT}/proxies/GLOBAL" | ( [ -x "$YQ_BIN" ] && "$YQ_BIN" eval '.now' - 2>/dev/null || command -v yq >/dev/null 2>&1 && yq eval '.now' - 2>/dev/null || sed -n 's/.*"now":"\([^"]*\)".*/\1/p' ))
+    GLOBAL_NOW=$(curl -s --max-time 5 "http://127.0.0.1:${CONTROLLER_PORT}/proxies/GLOBAL" | (
+        if [ -x "$YQ_BIN" ]; then
+            "$YQ_BIN" eval '.now' - 2>/dev/null
+        elif command -v yq >/dev/null 2>&1; then
+            yq eval '.now' - 2>/dev/null
+        else
+            sed -n 's/.*"now":"\([^"]*\)".*/\1/p'
+        fi
+    ))
     if [ "${GLOBAL_NOW:-}" = "DIRECT" ]; then
         check_status "策略组 GLOBAL" "WARN" "当前为 DIRECT，可能导致通过 ${PROXY_PORT} 的请求仍走直连；可在 Dashboard/API 手动切换"
     elif [ -n "${GLOBAL_NOW:-}" ] && [ "$GLOBAL_NOW" != "null" ]; then
