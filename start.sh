@@ -312,16 +312,20 @@ get_probe_host() {
 
 wait_for_mihomo_ready() {
     local pid="$1"
-    local host code i
+    local host probe_host code i
 
     host="$(get_probe_host)"
+    probe_host="$host"
+    if [[ "$probe_host" == *:* ]] && [[ ! "$probe_host" =~ ^\[.*\]$ ]]; then
+        probe_host="[${probe_host}]"
+    fi
 
     for i in $(seq 1 15); do
         if ! kill -0 "$pid" 2>/dev/null; then
             return 1
         fi
 
-        code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://${host}:${ACTUAL_CONTROLLER_PORT}/version" || true)"
+        code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://${probe_host}:${ACTUAL_CONTROLLER_PORT}/version" || true)"
         if [ "$code" = "200" ]; then
             return 0
         fi
