@@ -195,7 +195,8 @@ echo ""
 
 # 5. 网络与控制接口测试
 echo "5. 网络与控制接口测试"
-if curl -s --max-time 5 "http://127.0.0.1:${CONTROLLER_PORT}/version" | grep -q '{'; then
+VERSION_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:${CONTROLLER_PORT}/version")
+if [ "$VERSION_HTTP_CODE" -eq 200 ]; then
     check_status "控制接口 (/version)" "PASS" "控制接口可访问"
 
     GLOBAL_NOW=$(curl -s --max-time 5 "http://127.0.0.1:${CONTROLLER_PORT}/proxies/GLOBAL" | (
