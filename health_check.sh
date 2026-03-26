@@ -122,10 +122,20 @@ get_controller_probe_host() {
     echo "$host"
 }
 
+format_http_host() {
+    local host="$1"
+    if [[ "$host" == *:* ]] && [[ ! "$host" =~ ^\[.*\]$ ]]; then
+        echo "[$host]"
+    else
+        echo "$host"
+    fi
+}
+
 controller_ok() {
-    local host code
+    local host probe_host code
     host="$(get_controller_probe_host)"
-    code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${host}:${CONTROLLER_PORT}/version" || true)"
+    probe_host="$(format_http_host "$host")"
+    code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${probe_host}:${CONTROLLER_PORT}/version" || true)"
     [ "$code" = "200" ]
 }
 
@@ -288,12 +298,13 @@ echo ""
 # 5. 网络与控制接口测试
 echo "5. 网络与控制接口测试"
 CONTROLLER_HOST="$(get_controller_probe_host)"
-VERSION_HTTP_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${CONTROLLER_HOST}:${CONTROLLER_PORT}/version" || true)"
+CONTROLLER_HTTP_HOST="$(format_http_host "$CONTROLLER_HOST")"
+VERSION_HTTP_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${CONTROLLER_HTTP_HOST}:${CONTROLLER_PORT}/version" || true)"
 if [ "$VERSION_HTTP_CODE" = "200" ]; then
     check_status "控制接口 (/version)" "PASS" "控制接口可访问"
     CONTROLLER_OK=1
 
-    GLOBAL_NOW=$(curl -s --max-time 5 "http://${CONTROLLER_HOST}:${CONTROLLER_PORT}/proxies/GLOBAL" | (
+    GLOBAL_NOW=$(curl -s --max-time 5 "http://${CONTROLLER_HTTP_HOST}:${CONTROLLER_PORT}/proxies/GLOBAL" | (
         if [ -x "$YQ_BIN" ]; then
             "$YQ_BIN" eval '.now' - 2>/dev/null
         elif command -v yq >/dev/null 2>&1; then
