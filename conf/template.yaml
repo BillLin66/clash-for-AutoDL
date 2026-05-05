@@ -3,7 +3,7 @@ allow-lan: true
 bind-address: '*'
 mode: rule
 log-level: info
-external-controller: '127.0.0.1:9090'
+external-controller: '127.0.0.1:6006'
 external-ui: dashboard
 hosts:
     mtalk.google.com: 108.177.125.188

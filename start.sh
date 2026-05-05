@@ -406,9 +406,7 @@ if [ -f "$Config_File" ]; then
     echo "配置文件已存在，无需下载。"
 else
     echo -e '\n正在检测订阅地址...'
-    if curl -o /dev/null -L -k -sS --retry 5 -m 10 --connect-timeout 10 -w "%{http_code}" "$URL" | grep -E '^[23][0-9]{2}$' &>/dev/null; then
-        echo "Clash订阅地址可访问！"
-        
+    if validate_subscription_url "$URL"; then
         echo -e '\n正在下载Clash配置文件...'
         if curl -L -k -sS --retry 5 -m 30 -o "$Config_File" "$URL"; then
             echo "配置文件下载成功！"
@@ -503,8 +501,8 @@ fi
 if [[ $Status -eq 0 ]]; then
     # Output Dashboard access address and Secret
     echo ''
-    echo -e "Clash 控制面板访问地址: http://127.0.0.1:9090/ui"
-    echo -e "如需远程访问，请自行做 SSH/VSCode 端口转发 9090"
+    echo -e "Clash 控制面板访问地址: http://127.0.0.1:6006/ui"
+    echo -e "如需远程访问，请自行做 SSH/VSCode 端口转发 6006"
     echo ''
 fi
 
@@ -548,7 +546,7 @@ function proxy_on() {
     export HTTPS_PROXY=http://127.0.0.1:$CLASH_PORT
     export NO_PROXY=127.0.0.1,localhost
     
-    if [ #is_quiet != "true" ]; then
+    if [ "#is_quiet" != "true" ]; then
         echo -e "${GREEN}[√] 已开启代理${NC}"
     fi
 }
@@ -559,7 +557,7 @@ function proxy_off() {
     
     unset http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY
 
-    if [ #is_quiet != "true" ]; then
+    if [ "#is_quiet" != "true" ]; then
         echo -e "${RED}[×] 已关闭代理${NC}"
     fi
 }
@@ -576,9 +574,13 @@ EOF
         envsubst < /tmp/clash_functions_template > /tmp/clash_functions
     else
         # 纯bash实现变量替换，不依赖envsubst
-        eval "cat << EOF
-$(cat /tmp/clash_functions_template)
-EOF" > /tmp/clash_functions
+        template_content=$(cat /tmp/clash_functions_template)
+        template_content=${template_content//\$CLASH_PORT/$CLASH_PORT}
+        template_content=${template_content//\$GREEN/$GREEN}
+        template_content=${template_content//\$RED/$RED}
+        template_content=${template_content//\$NC/$NC}
+        template_content=${template_content//\$Server_Dir/$Server_Dir}
+        printf "%s" "$template_content" > /tmp/clash_functions
     fi
 
     # 在临时函数文件中将 #is_quiet 替换为 $is_quiet
