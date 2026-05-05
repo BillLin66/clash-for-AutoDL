@@ -60,15 +60,13 @@ safe_remove() {
 # 关闭clash服务
 Text1="clash进程关闭成功！"
 Text2="clash进程关闭失败！"
-mapfile -t PIDS < <(pgrep -f "mihomo-linux|clash-linux")
-PID_NUM=${#PIDS[@]}
+PIDS=$(pgrep -f "mihomo-linux|clash-linux")
+PID_NUM=$(printf '%s\n' "$PIDS" | sed '/^$/d' | wc -l)
 ReturnStatus=0
 if [ "$PID_NUM" -ne 0 ]; then
-  for pid in "${PIDS[@]}"; do
-    if [ -n "$pid" ]; then
-      if ! kill "$pid" &>/dev/null; then
-        ReturnStatus=1
-      fi
+  for pid in $PIDS; do
+    if ! kill "$pid" &>/dev/null; then
+      ReturnStatus=1
     fi
   done
 fi
