@@ -546,7 +546,7 @@ function proxy_on() {
     export HTTPS_PROXY=http://127.0.0.1:$CLASH_PORT
     export NO_PROXY=127.0.0.1,localhost
     
-    if [ "#is_quiet" != "true" ]; then
+    if [ "$is_quiet" != "true" ]; then
         echo -e "${GREEN}[√] 已开启代理${NC}"
     fi
 }
@@ -557,7 +557,7 @@ function proxy_off() {
     
     unset http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY
 
-    if [ "#is_quiet" != "true" ]; then
+    if [ "$is_quiet" != "true" ]; then
         echo -e "${RED}[×] 已关闭代理${NC}"
     fi
 }
@@ -572,7 +572,8 @@ EOF
     # 使用 envsubst 替换变量
     if command -v envsubst &> /dev/null; then
         export CLASH_PORT GREEN RED NC Server_Dir
-        envsubst < /tmp/clash_functions_template > /tmp/clash_functions
+        envsubst '${CLASH_PORT} ${GREEN} ${RED} ${NC} ${Server_Dir}' \
+            < /tmp/clash_functions_template > /tmp/clash_functions
     else
         # 纯bash实现变量替换，不依赖envsubst
         template_content=$(cat /tmp/clash_functions_template)
@@ -588,9 +589,6 @@ EOF
         template_content=${template_content//\$Server_Dir/$Server_Dir}
         printf "%s" "$template_content" > /tmp/clash_functions
     fi
-
-    # 在临时函数文件中将 #is_quiet 替换为 $is_quiet
-    sed -i 's/#is_quiet/$is_quiet/g' /tmp/clash_functions
 
     # 将函数追加到 .bashrc
     cat /tmp/clash_functions >> ~/.bashrc
