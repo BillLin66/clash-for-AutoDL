@@ -534,10 +534,10 @@ if [[ $Status -eq 0 ]]; then
     sed -i '/^$/N;/^\n$/D' ~/.bashrc
 
     # 定义要添加的函数内容
-    cat << EOF > /tmp/clash_functions_template
+    cat << 'EOF' > /tmp/clash_functions_template
 # 开启系统代理
 function proxy_on() {
-    local is_quiet=\${1:-false}
+    local is_quiet=${1:-false}
     
     export http_proxy=http://127.0.0.1:$CLASH_PORT
     export https_proxy=http://127.0.0.1:$CLASH_PORT
@@ -553,7 +553,7 @@ function proxy_on() {
 
 # 关闭系统代理
 function proxy_off() {
-    local is_quiet=\${1:-false}
+    local is_quiet=${1:-false}
     
     unset http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY
 
@@ -571,10 +571,16 @@ EOF
 
     # 使用 envsubst 替换变量
     if command -v envsubst &> /dev/null; then
+        export CLASH_PORT GREEN RED NC Server_Dir
         envsubst < /tmp/clash_functions_template > /tmp/clash_functions
     else
         # 纯bash实现变量替换，不依赖envsubst
         template_content=$(cat /tmp/clash_functions_template)
+        template_content=${template_content//\$\{CLASH_PORT\}/$CLASH_PORT}
+        template_content=${template_content//\$\{GREEN\}/$GREEN}
+        template_content=${template_content//\$\{RED\}/$RED}
+        template_content=${template_content//\$\{NC\}/$NC}
+        template_content=${template_content//\$\{Server_Dir\}/$Server_Dir}
         template_content=${template_content//\$CLASH_PORT/$CLASH_PORT}
         template_content=${template_content//\$GREEN/$GREEN}
         template_content=${template_content//\$RED/$RED}

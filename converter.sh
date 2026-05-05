@@ -433,9 +433,11 @@ EOF
     
     # 添加代理组和规则（使用参考配置的格式）
     if [ $PROXY_COUNT -gt 0 ]; then
-        # 提取所有代理名称
+        # 提取所有代理名称（仅限 proxies 段）
         local proxy_names
-        proxy_names=$(grep -oE "name: ['\"][^'\"]+['\"]" "$output_file" | sed -E "s/name: ['\"]([^'\"]+)['\"]/\\1/")
+        proxy_names=$(awk '/^proxies:/{in_proxies=1; next} /^proxy-groups:/{in_proxies=0} in_proxies {print}' "$output_file" \
+            | grep -oE "name: ['\"][^'\"]+['\"]" \
+            | sed -E "s/name: ['\"]([^'\"]+)['\"]/\\1/")
         
         # 生成代理组配置（紧凑格式，符合参考配置）
         echo "" >> "$output_file"
