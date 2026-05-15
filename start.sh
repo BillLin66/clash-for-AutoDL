@@ -536,16 +536,27 @@ else
     fi
 fi
 
-# 合并配置文件 (仅当模板文件存在时)
-if [ -f "$TEMPLATE_FILE" ]; then
-    if [ -x "$YQ_BINARY" ]; then
-        $YQ_BINARY -n "load(\"$Config_File\") * load(\"$TEMPLATE_FILE\")" > $MERGED_FILE
-        mv $MERGED_FILE $Config_File
-    else
-        echo -e "${RED}yq binary不可执行，跳过配置文件合并${NC}"
-    fi
+# 不再把 template.yaml 强行 merge 到已有订阅配置。
+# 原因：订阅配置可能自带 proxy-groups/rules；强行合并模板会让 rules 引用不存在的 group。
+# converter.sh 已经会在需要转换时使用 template.yaml 生成完整配置。
+echo -e "${YELLOW}跳过模板合并，保留订阅配置中的 proxy-groups/rules。${NC}"
+
+# 只补充 Mihomo 运行需要的顶层默认字段，不改 proxies/proxy-groups/rules。
+if [ -x "$YQ_BINARY" ]; then
+    tmp_runtime="$MERGED_FILE"
+    cp "$Config_File" "$tmp_runtime"
+
+    "$YQ_BINARY" eval -i '."mixed-port" = (."mixed-port" // 7890)' "$tmp_runtime"
+    "$YQ_BINARY" eval -i '."allow-lan" = (."allow-lan" // true)' "$tmp_runtime"
+    "$YQ_BINARY" eval -i '."bind-address" = (."bind-address" // "*")' "$tmp_runtime"
+    "$YQ_BINARY" eval -i '.mode = (.mode // "rule")' "$tmp_runtime"
+    "$YQ_BINARY" eval -i '."log-level" = (."log-level" // "info")' "$tmp_runtime"
+    "$YQ_BINARY" eval -i '."external-controller" = (."external-controller" // "127.0.0.1:9090")' "$tmp_runtime"
+    "$YQ_BINARY" eval -i '."external-ui" = (."external-ui" // "dashboard")' "$tmp_runtime"
+
+    mv "$tmp_runtime" "$Config_File"
 else
-    echo -e "${YELLOW}模板文件不存在，跳过配置文件合并${NC}"
+    echo -e "${YELLOW}yq binary不可执行，跳过运行字段补充。${NC}"
 fi
 
 # CPU架构已在前面检测，此处无需重复检测

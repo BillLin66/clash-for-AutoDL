@@ -10,7 +10,17 @@ Config_File="$Conf_Dir/config.yaml"
 Env_File="$Server_Dir/.env"
 PID_FILE="$Server_Dir/clash.pid"
 CONTROL_PORT="9090"
+
+# 自动读取实际代理端口，避免配置使用 mixed-port=9981 但健康检查仍检查 7890
+YQ_BINARY="$Server_Dir/bin/yq"
 PROXY_PORT="7890"
+
+if [ -x "$YQ_BINARY" ] && [ -f "$Config_File" ]; then
+    DETECTED_PROXY_PORT=$("$YQ_BINARY" eval '."mixed-port" // .port // 7890' "$Config_File" 2>/dev/null)
+    if [[ "$DETECTED_PROXY_PORT" =~ ^[0-9]+$ ]] && [ "$DETECTED_PROXY_PORT" -gt 0 ]; then
+        PROXY_PORT="$DETECTED_PROXY_PORT"
+    fi
+fi
 
 cat <<EOF_HEADER
 ======================================
