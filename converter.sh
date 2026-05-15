@@ -13,7 +13,7 @@ RAW_CONFIG_FILE="$CONF_DIR/config_raw.yaml"
 DECODED_CONFIG_FILE="$CONF_DIR/config_decoded.yaml"
 TEMPLATE_FILE="$CONF_DIR/template.yaml"
 INSERT_MARKER="# __CLASH_FOR_AUTODL_PROXIES__"
-PRIMARY_PROXY_GROUP="悠兔"
+PRIMARY_PROXY_GROUP="🚀 节点选择"
 
 # 代理计数器
 PROXY_COUNT=0
@@ -21,6 +21,104 @@ DUPLICATE_COUNT=0
 
 # 临时文件用于重复名称处理，并作为生成代理组的代理名列表
 TEMP_NAME_FILE="/tmp/clash_proxy_names.tmp"
+
+
+# 将任意字符串格式化为 YAML 安全的双引号字符串
+yaml_quote() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '"%s"\n' "$value"
+}
+
+# 记录并返回去重后的代理名称，供代理组生成逻辑使用
+register_proxy_name() {
+    local name="$1"
+    local candidate="$name"
+    local suffix=1
+
+    while [ -f "$TEMP_NAME_FILE" ] && grep -Fxq "$candidate" "$TEMP_NAME_FILE"; do
+        candidate="${name}-${suffix}"
+        suffix=$((suffix + 1))
+    done
+
+    if [ "$candidate" != "$name" ]; then
+        DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
+    fi
+
+    echo "$candidate" >> "$TEMP_NAME_FILE"
+    printf '%s\n' "$candidate"
+}
+
+# 生成引用真实代理节点名称的完整代理组配置
+generate_proxy_groups() {
+    local output_file="$1"
+    local quoted_main quoted_auto quoted_fallback
+    quoted_main=$(yaml_quote "$MAIN_PROXY_GROUP")
+    quoted_auto=$(yaml_quote "$AUTO_PROXY_GROUP")
+    quoted_fallback=$(yaml_quote "$FALLBACK_PROXY_GROUP")
+
+    echo "" >> "$output_file"
+    echo "proxy-groups:" >> "$output_file"
+    cat >> "$output_file" << EOF
+  - name: $quoted_main
+    type: select
+    proxies:
+      - $quoted_auto
+      - $quoted_fallback
+EOF
+    while IFS= read -r name; do
+        [ -z "$name" ] && continue
+        echo "      - $(yaml_quote "$name")" >> "$output_file"
+    done < "$TEMP_NAME_FILE"
+
+    cat >> "$output_file" << EOF
+  - name: $quoted_auto
+    type: url-test
+    proxies:
+EOF
+    while IFS= read -r name; do
+        [ -z "$name" ] && continue
+        echo "      - $(yaml_quote "$name")" >> "$output_file"
+    done < "$TEMP_NAME_FILE"
+    cat >> "$output_file" << EOF
+    url: $PROXY_TEST_URL
+    interval: 86400
+  - name: $quoted_fallback
+    type: fallback
+    proxies:
+EOF
+    while IFS= read -r name; do
+        [ -z "$name" ] && continue
+        echo "      - $(yaml_quote "$name")" >> "$output_file"
+    done < "$TEMP_NAME_FILE"
+    cat >> "$output_file" << EOF
+    url: $PROXY_TEST_URL
+    interval: 7200
+EOF
+}
+
+# 追加规则，确保最终只有一个 rules: 段并以主代理组兜底规则结束
+append_rules() {
+    local output_file="$1"
+    local template_file="$2"
+
+    echo "" >> "$output_file"
+    if [ -f "$template_file" ]; then
+        awk -v main="$MAIN_PROXY_GROUP" '
+            BEGIN { in_rules = 0 }
+            /^rules:/ { in_rules = 1; print; next }
+            in_rules {
+                if ($0 ~ "MATCH," main) { next }
+                print
+            }
+        ' "$template_file" >> "$output_file"
+    else
+        echo "rules:" >> "$output_file"
+        echo "    - 'GEOIP,CN,DIRECT'" >> "$output_file"
+    fi
+    echo "    - 'MATCH,$MAIN_PROXY_GROUP'" >> "$output_file"
+}
 
 # URL安全的base64解码函数
 decode_base64_url() {
@@ -82,15 +180,11 @@ parse_ss() {
         fi
     fi
     
-    # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -Fxq "$name" "$TEMP_NAME_FILE"; then
-        DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
-        name="${name}-${DUPLICATE_COUNT}"
-    fi
-    echo "$name" >> "$TEMP_NAME_FILE"
+    # 检查重复名称并记录成功解析的代理名称
+    name=$(register_proxy_name "$name")
     
     # 输出Clash格式配置（紧凑格式）
-    echo "    - { name: '$name', type: ss, server: $server, port: $port, cipher: $method, password: $password, udp: true }"
+    echo "  - { name: $(yaml_quote "$name"), type: ss, server: $(yaml_quote "$server"), port: $port, cipher: $(yaml_quote "$method"), password: $(yaml_quote "$password"), udp: true }"
     
     PROXY_COUNT=$((PROXY_COUNT + 1))
 }
@@ -147,16 +241,12 @@ parse_ssr() {
         name="$remarks"
     fi
     
-    # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -Fxq "$name" "$TEMP_NAME_FILE"; then
-        DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
-        name="${name}-${DUPLICATE_COUNT}"
-    fi
-    echo "$name" >> "$TEMP_NAME_FILE"
+    # 检查重复名称并记录成功解析的代理名称
+    name=$(register_proxy_name "$name")
     
     # 输出Clash格式配置
     cat << EOF
-  - name: "$name"
+  - name: $(yaml_quote "$name")
     type: ssr
     server: $server
     port: $port
@@ -227,16 +317,12 @@ parse_vless() {
     # 清理名称中的空格和特殊字符
     name=$(echo "$name" | sed 's/[[:space:]]*$//' | sed 's/[[:space:]]*$//')
     
-    # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -Fxq "$name" "$TEMP_NAME_FILE"; then
-        DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
-        name="${name}-${DUPLICATE_COUNT}"
-    fi
-    echo "$name" >> "$TEMP_NAME_FILE"
+    # 检查重复名称并记录成功解析的代理名称
+    name=$(register_proxy_name "$name")
     
     # 输出Clash格式配置
     cat << EOF
-  - name: "$name"
+  - name: $(yaml_quote "$name")
     type: vless
     server: $server
     port: $port
@@ -309,16 +395,12 @@ except:
         name="VMESS-${server}-${port}"
     fi
     
-    # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -Fxq "$name" "$TEMP_NAME_FILE"; then
-        DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
-        name="${name}-${DUPLICATE_COUNT}"
-    fi
-    echo "$name" >> "$TEMP_NAME_FILE"
+    # 检查重复名称并记录成功解析的代理名称
+    name=$(register_proxy_name "$name")
     
     # 输出Clash格式配置
     cat << EOF
-  - name: "$name"
+  - name: $(yaml_quote "$name")
     type: vmess
     server: $server
     port: $port
@@ -428,8 +510,9 @@ convert_subscription() {
     
     # 检查文件是否是base64编码的订阅链接
     local temp_decoded="/tmp/decoded_subscription.txt"
-    if decode_base64_url "$(cat "$input_file")" > "$temp_decoded" 2>/dev/null && \
-        grep -Eq '^(ss|ssr|vless|vmess)://' "$temp_decoded"; then
+    if decode_base64_url "$(cat "$input_file")" > "$temp_decoded" 2>/dev/null \
+        && [ -s "$temp_decoded" ] \
+        && grep -Eq '^(ss|ssr|vless|vmess)://' "$temp_decoded"; then
         echo -e "${YELLOW}检测到base64编码的订阅链接，进行解码...${NC}"
         input_file="$temp_decoded"
     fi
@@ -519,7 +602,7 @@ convert_subscription() {
         rm -f "$output_tmp" "$TEMP_NAME_FILE" "$temp_decoded"
         return 1
     fi
-    
+
     # 清理临时文件
     rm -f "$TEMP_NAME_FILE"
     rm -f "$temp_decoded"
