@@ -23,7 +23,7 @@ dns:
 # INSERTION POINT CONTRACT:
 # - converter.sh copies the template header above this marker.
 # - converter.sh writes the generated `proxies:` and full `proxy-groups:` sections here.
-# - converter.sh then appends exactly one `rules:` section from below.
+# - converter.sh then appends the `rules:` section from below.
 #
 # Proxy group templates referenced by converter.sh; `PROXY_NAMES` means the
 # actual proxy names parsed from the subscription, not a static placeholder.
