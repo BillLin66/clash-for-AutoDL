@@ -7,7 +7,8 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 配置文件路径
-CONF_DIR="$(dirname "$0")/conf"
+SERVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONF_DIR="$SERVER_DIR/conf"
 CONFIG_FILE="$CONF_DIR/config.yaml"
 RAW_CONFIG_FILE="$CONF_DIR/config_raw.yaml"
 DECODED_CONFIG_FILE="$CONF_DIR/config_decoded.yaml"
@@ -15,6 +16,7 @@ TEMPLATE_FILE="$CONF_DIR/template.yaml"
 INSERT_MARKER="# __CLASH_FOR_AUTODL_PROXIES__"
 # Keep this value aligned with the template MATCH target in conf/template.yaml.
 PRIMARY_PROXY_GROUP="🚀 节点选择"
+CONTROL_PORT="9090"
 
 # 代理计数器
 PROXY_COUNT=0
@@ -565,18 +567,15 @@ convert_subscription() {
 set_proxy_mode() {
     local config_file="$1"
     local mode="${2:-rule}"  # 默认为rule模式
-    
-    # 检查mihomo是否运行
-    if ! pgrep -f "mihomo" >/dev/null 2>&1; then
-        echo -e "${YELLOW}Mihomo未运行，无法设置代理模式${NC}"
+    local controller_url="http://127.0.0.1:${CONTROL_PORT}/configs"
+
+    # 转换器可能在服务启动前运行；只有控制接口可用时才尝试设置模式。
+    if ! curl -fsS --max-time 2 "$controller_url" >/dev/null 2>&1; then
+        echo -e "${YELLOW}Mihomo 控制接口未就绪，跳过自动设置代理模式: $controller_url${NC}"
         return 1
     fi
-    
-    # 等待mihomo完全启动
-    sleep 2
-    
-    # 设置代理模式
-    if curl -s -X PUT "http://127.0.0.1:6006/configs" \
+
+    if curl -fsS --max-time 5 -X PUT "$controller_url" \
         -H "Content-Type: application/json" \
         -d "{\"mode\": \"$mode\"}" >/dev/null 2>&1; then
         echo -e "${GREEN}代理模式已设置为: $mode${NC}"
@@ -584,7 +583,6 @@ set_proxy_mode() {
         echo -e "${YELLOW}无法设置代理模式，请手动在面板中设置${NC}"
     fi
 }
-
 # 主函数
 main() {
     local input_file="${1:-$RAW_CONFIG_FILE}"
