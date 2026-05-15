@@ -244,8 +244,8 @@ parse_vless() {
         name="VLESS-${server}-${port}"
     fi
     
-    # 清理名称中的空格和特殊字符
-    name=$(echo "$name" | sed 's/[[:space:]]*$//')
+    # 清理名称中的尾部空白字符
+    name="${name%"${name##*[![:space:]]}"}"
     
     # 检查重复名称并记录成功解析的代理名称
     name=$(register_proxy_name "$name")
