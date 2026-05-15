@@ -13,6 +13,7 @@ RAW_CONFIG_FILE="$CONF_DIR/config_raw.yaml"
 DECODED_CONFIG_FILE="$CONF_DIR/config_decoded.yaml"
 TEMPLATE_FILE="$CONF_DIR/template.yaml"
 INSERT_MARKER="# __CLASH_FOR_AUTODL_PROXIES__"
+# Keep this value aligned with the template MATCH target in conf/template.yaml.
 PRIMARY_PROXY_GROUP="🚀 节点选择"
 
 # 代理计数器
@@ -440,9 +441,9 @@ convert_subscription() {
     
     # 检查文件是否是base64编码的订阅链接
     local temp_decoded="/tmp/decoded_subscription.txt"
-    if decode_base64_url "$(cat "$input_file")" > "$temp_decoded" 2>/dev/null \
-   && [ -s "$temp_decoded" ] \
-   && grep -Eq '^(ss|ssr|vless|vmess)://' "$temp_decoded"; then
+    local raw_subscription
+    raw_subscription=$(cat "$input_file")
+    if decode_base64_url "$raw_subscription" > "$temp_decoded" 2>/dev/null && [ -s "$temp_decoded" ] && grep -Eq '^(ss|ssr|vless|vmess)://' "$temp_decoded"; then
         echo -e "${YELLOW}检测到base64编码的订阅链接，进行解码...${NC}"
         input_file="$temp_decoded"
     fi

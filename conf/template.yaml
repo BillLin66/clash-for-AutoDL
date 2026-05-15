@@ -60,4 +60,5 @@ rules:
     - 'IP-CIDR,185.25.182.0/23,DIRECT'
     - 'IP-CIDR,208.78.164.0/22,DIRECT'
     - 'GEOIP,CN,DIRECT'
+    # Keep this group name aligned with converter.sh PRIMARY_PROXY_GROUP.
     - 'MATCH,🚀 节点选择'
