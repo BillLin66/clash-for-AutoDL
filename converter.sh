@@ -50,76 +50,6 @@ register_proxy_name() {
     printf '%s\n' "$candidate"
 }
 
-# 生成引用真实代理节点名称的完整代理组配置
-generate_proxy_groups() {
-    local output_file="$1"
-    local quoted_main quoted_auto quoted_fallback
-    quoted_main=$(yaml_quote "$MAIN_PROXY_GROUP")
-    quoted_auto=$(yaml_quote "$AUTO_PROXY_GROUP")
-    quoted_fallback=$(yaml_quote "$FALLBACK_PROXY_GROUP")
-
-    echo "" >> "$output_file"
-    echo "proxy-groups:" >> "$output_file"
-    cat >> "$output_file" << EOF
-  - name: $quoted_main
-    type: select
-    proxies:
-      - $quoted_auto
-      - $quoted_fallback
-EOF
-    while IFS= read -r name; do
-        [ -z "$name" ] && continue
-        echo "      - $(yaml_quote "$name")" >> "$output_file"
-    done < "$TEMP_NAME_FILE"
-
-    cat >> "$output_file" << EOF
-  - name: $quoted_auto
-    type: url-test
-    proxies:
-EOF
-    while IFS= read -r name; do
-        [ -z "$name" ] && continue
-        echo "      - $(yaml_quote "$name")" >> "$output_file"
-    done < "$TEMP_NAME_FILE"
-    cat >> "$output_file" << EOF
-    url: $PROXY_TEST_URL
-    interval: 86400
-  - name: $quoted_fallback
-    type: fallback
-    proxies:
-EOF
-    while IFS= read -r name; do
-        [ -z "$name" ] && continue
-        echo "      - $(yaml_quote "$name")" >> "$output_file"
-    done < "$TEMP_NAME_FILE"
-    cat >> "$output_file" << EOF
-    url: $PROXY_TEST_URL
-    interval: 7200
-EOF
-}
-
-# 追加规则，确保最终只有一个 rules: 段并以主代理组兜底规则结束
-append_rules() {
-    local output_file="$1"
-    local template_file="$2"
-
-    echo "" >> "$output_file"
-    if [ -f "$template_file" ]; then
-        awk -v main="$MAIN_PROXY_GROUP" '
-            BEGIN { in_rules = 0 }
-            /^rules:/ { in_rules = 1; print; next }
-            in_rules {
-                if ($0 ~ "MATCH," main) { next }
-                print
-            }
-        ' "$template_file" >> "$output_file"
-    else
-        echo "rules:" >> "$output_file"
-        echo "    - 'GEOIP,CN,DIRECT'" >> "$output_file"
-    fi
-    echo "    - 'MATCH,$MAIN_PROXY_GROUP'" >> "$output_file"
-}
-
 # URL安全的base64解码函数
 decode_base64_url() {
     local input="$1"
@@ -315,7 +245,7 @@ parse_vless() {
     fi
     
     # 清理名称中的空格和特殊字符
-    name=$(echo "$name" | sed 's/[[:space:]]*$//' | sed 's/[[:space:]]*$//')
+    name=$(echo "$name" | sed 's/[[:space:]]*$//')
     
     # 检查重复名称并记录成功解析的代理名称
     name=$(register_proxy_name "$name")
