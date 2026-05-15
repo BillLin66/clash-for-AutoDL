@@ -441,8 +441,8 @@ convert_subscription() {
     # 检查文件是否是base64编码的订阅链接
     local temp_decoded="/tmp/decoded_subscription.txt"
     if decode_base64_url "$(cat "$input_file")" > "$temp_decoded" 2>/dev/null \
-        && [ -s "$temp_decoded" ] \
-        && grep -Eq '^(ss|ssr|vless|vmess)://' "$temp_decoded"; then
+       && [ -s "$temp_decoded" ] \
+       && grep -Eq '^(ss|ssr|vless|vmess)://' "$temp_decoded"; then
         echo -e "${YELLOW}检测到base64编码的订阅链接，进行解码...${NC}"
         input_file="$temp_decoded"
     fi
