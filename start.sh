@@ -32,7 +32,12 @@ Conf_Dir="$Server_Dir/conf"
 Log_Dir="$Server_Dir/logs"
 
 # 注入配置文件里面的变量
-source $Server_Dir/.env
+ENV_FILE="$Server_Dir/.env"
+if [ ! -f "$ENV_FILE" ]; then
+    echo -e "${RED}错误：未找到 .env 文件，请先复制 .env.example 并配置 CLASH_URL${NC}"
+    return 1 2>/dev/null || exit 1
+fi
+source "$ENV_FILE"
 
 # 第三方库版本变量
 MIHOMO_VERSION="1.19.11"
@@ -43,6 +48,8 @@ YQ_BINARY="$Server_Dir/bin/yq"
 log_file="logs/mihomo.log"
 Config_File="$Conf_Dir/config.yaml"
 CONVERTER_SCRIPT="$Server_Dir/converter.sh"
+PID_FILE="$Server_Dir/clash.pid"
+CONTROL_PORT="9090"
 
 # URL变量
 URL=${CLASH_URL:?Error: CLASH_URL variable is not set or empty}
@@ -341,6 +348,88 @@ if_success() {
     fi
 }
 
+is_managed_service_running() {
+    if [ ! -f "$PID_FILE" ]; then
+        return 1
+    fi
+
+    local pid
+    pid=$(cat "$PID_FILE" 2>/dev/null)
+    if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+
+    rm -f "$PID_FILE"
+    return 1
+}
+
+stop_managed_service() {
+    if ! is_managed_service_running; then
+        echo -e "${YELLOW}未发现由本项目 PID 文件管理的 Mihomo 进程。${NC}"
+        return 0
+    fi
+
+    local pid
+    pid=$(cat "$PID_FILE")
+    echo "正在关闭已由本项目管理的 Mihomo 进程 (PID: $pid)..."
+    kill "$pid" 2>/dev/null || true
+
+    for _ in $(seq 1 10); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$PID_FILE"
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo -e "${YELLOW}进程未在超时时间内退出，尝试强制关闭 (PID: $pid)...${NC}"
+    kill -9 "$pid" 2>/dev/null || true
+    rm -f "$PID_FILE"
+}
+
+wait_for_service_ready() {
+    local pid="$1"
+    local controller_url="http://127.0.0.1:${CONTROL_PORT}/configs"
+
+    for _ in $(seq 1 15); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo -e "${RED}Mihomo 进程已退出，请检查日志: $Log_Dir/mihomo.log${NC}"
+            return 1
+        fi
+
+        if curl -fsS --max-time 2 "$controller_url" >/dev/null 2>&1; then
+            return 0
+        fi
+
+        sleep 1
+    done
+
+    echo -e "${RED}Mihomo 控制接口未就绪: $controller_url${NC}"
+    echo -e "${RED}请检查日志: $Log_Dir/mihomo.log${NC}"
+    return 1
+}
+
+start_mihomo_service() {
+    local mihomo_bin="$1"
+
+    if [ ! -x "$mihomo_bin" ]; then
+        echo -e "${RED}Mihomo 二进制文件不可执行: $mihomo_bin${NC}"
+        return 1
+    fi
+
+    nohup "$mihomo_bin" -d "$Conf_Dir" > "$Log_Dir/mihomo.log" 2>&1 </dev/null &
+    local pid=$!
+    echo "$pid" > "$PID_FILE"
+
+    if wait_for_service_ready "$pid"; then
+        return 0
+    fi
+
+    kill "$pid" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    return 1
+}
+
 #==============================================================
 # 鲁棒性检测
 #==============================================================
@@ -392,11 +481,8 @@ if ! check_converter_script; then
     exit 1
 fi
 
-# 检测mihomo进程是否存在，存在则要先杀掉，不存在就正常执行
-pids=$(pgrep -f "mihomo-linux")
-if [ -n "$pids" ]; then
-    kill $pids &>/dev/null
-fi
+# 检测本项目 PID 文件管理的 Mihomo 进程，存在则先关闭
+stop_managed_service
 
 #==============================================================
 # 配置文件检查与下载
@@ -476,24 +562,21 @@ if [[ $Status -eq 0 ]]; then
     if [[ $CpuArch =~ "x86_64" || $CpuArch =~ "amd64"  ]]; then
         mihomo_bin="$Server_Dir/bin/mihomo-linux-amd64"
         [[ ! -f "$mihomo_bin" ]] && download_clash "amd64"
-        nohup "$mihomo_bin" -d "$Conf_Dir" > "$Log_Dir/mihomo.log" 2>&1 </dev/null &
-        disown
+        start_mihomo_service "$mihomo_bin"
         ReturnStatus=$?
-        if_success $Text5 $Text6 $ReturnStatus
+        if_success "$Text5" "$Text6" "$ReturnStatus"
     elif [[ $CpuArch =~ "aarch64" ||  $CpuArch =~ "arm64" ]]; then
         mihomo_bin="$Server_Dir/bin/mihomo-linux-arm64"
         [[ ! -f "$mihomo_bin" ]] && download_clash "arm64"
-        nohup "$mihomo_bin" -d "$Conf_Dir" > "$Log_Dir/mihomo.log" 2>&1 </dev/null &
-        disown
+        start_mihomo_service "$mihomo_bin"
         ReturnStatus=$?
-        if_success $Text5 $Text6 $ReturnStatus
+        if_success "$Text5" "$Text6" "$ReturnStatus"
     elif [[ $CpuArch =~ "armv7" ]]; then
         mihomo_bin="$Server_Dir/bin/mihomo-linux-armv7"
         [[ ! -f "$mihomo_bin" ]] && download_clash "armv7"
-        nohup "$mihomo_bin" -d "$Conf_Dir" > "$Log_Dir/mihomo.log" 2>&1 </dev/null &
-        disown
+        start_mihomo_service "$mihomo_bin"
         ReturnStatus=$?
-        if_success $Text5 $Text6 $ReturnStatus
+        if_success "$Text5" "$Text6" "$ReturnStatus"
     else
         echo -e "${RED}\n[ERROR] Unsupported CPU Architecture！${NC}"
         exit 1
@@ -503,8 +586,8 @@ fi
 if [[ $Status -eq 0 ]]; then
     # Output Dashboard access address and Secret
     echo ''
-    echo -e "Clash 控制面板访问地址: http://127.0.0.1:9090/ui"
-    echo -e "如需远程访问，请自行做 SSH/VSCode 端口转发 9090"
+    echo -e "Clash 控制面板访问地址: http://127.0.0.1:${CONTROL_PORT}/ui"
+    echo -e "如需远程访问，请自行做 SSH/VSCode 端口转发 ${CONTROL_PORT}"
     echo ''
 fi
 

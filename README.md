@@ -109,7 +109,7 @@ source ./start.sh
 正在启动Clash服务...
 服务启动成功！                                             [  OK  ]
 
-Clash 控制面板访问地址: http://<your_ip>:6006/ui
+Clash 控制面板访问地址: http://<your_ip>:9090/ui
 Secret: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 已添加代理函数到 .bashrc。
@@ -128,9 +128,9 @@ Secret: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 - 检查服务端口
 
 ```bash
-lsof -i -P -n | grep LISTEN | grep -E ':6006|:789[0-9]'
+lsof -i -P -n | grep LISTEN | grep -E ':9090|:789[0-9]'
 
-tcp        0      0 127.0.0.1:6006          0.0.0.0:*               LISTEN     
+tcp        0      0 127.0.0.1:9090          0.0.0.0:*               LISTEN
 tcp6       0      0 :::7890                 :::*                    LISTEN     
 tcp6       0      0 :::7891                 :::*                    LISTEN     
 tcp6       0      0 :::7892                 :::*                    LISTEN
@@ -183,16 +183,16 @@ SSH端口转发是最简单直接的方式，无需安装额外软件。
 1. 在本地终端（不是AutoDL服务器）运行以下命令：
 
 ```bash
-ssh -L 6006:localhost:6006 username@autodl_server_ip
+ssh -L 9090:localhost:9090 username@autodl_server_ip
 ```
 
 其中：
 - `username` 是你的AutoDL用户名
 - `autodl_server_ip` 是你的AutoDL服务器IP地址
 
-2. 保持SSH连接，在本地浏览器访问：`http://localhost:6006/ui`
+2. 保持SSH连接，在本地浏览器访问：`http://localhost:9090/ui`
 
-3. 在`API Base URL`中输入：`http://localhost:6006`，在`Secret(optional)`中输入启动时显示的Secret
+3. 在`API Base URL`中输入：`http://localhost:9090`，在`Secret(optional)`中输入启动时显示的Secret
 
 ### 方案二：VSCode 端口转发（推荐）
 
@@ -201,7 +201,7 @@ ssh -L 6006:localhost:6006 username@autodl_server_ip
 1. 在VSCode中连接到AutoDL服务器
 2. 打开终端，确保Clash服务正在运行
 3. 在VSCode左侧找到"端口"面板（如果没有显示，按`Ctrl+Shift+P`，搜索"Forward a Port"）
-4. 点击"+"添加端口转发，输入`6006`
+4. 点击"+"添加端口转发，输入`9090`
 5. VSCode会自动创建端口转发，点击生成的本地地址即可访问Dashboard
 
 ### 方案三：ngrok 内网穿透（备用）
@@ -232,11 +232,11 @@ curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trust
 
 - 映射端口
 
-打开新的shell，运行下面的命令，映射6006端口：
+打开新的shell，运行下面的命令，映射9090端口：
 
 ```bash
 proxy_off
-ngrok http 6006
+ngrok http 9090
 ```
 
 ![14.png](https://s2.loli.net/2024/06/20/FYJ4Bx37ovcemKt.png)
@@ -283,7 +283,7 @@ bash health_check.sh
 该脚本会自动检查以下项目：
 
 1. **Clash 进程状态** - 检查 Clash 是否正在运行
-2. **端口监听状态** - 检查代理端口（7890、7891、7892）和控制面板端口（6006）
+2. **端口监听状态** - 检查代理端口（7890）和控制面板端口（9090）
 3. **配置文件** - 检查 config.yaml 语法和代理节点配置
 4. **环境变量** - 检查代理环境变量和订阅地址配置
 5. **网络连接测试** - 测试是否能通过代理访问 Google 和 GitHub
@@ -302,9 +302,7 @@ Clash for AutoDL 健康检查
 
 2. 检查端口监听状态
 [✓] HTTP/SOCKS5代理端口 (7890): 端口正在监听
-[✓] HTTP代理端口 (7891): 端口正在监听
-[✓] SOCKS5代理端口 (7892): 端口正在监听
-[✓] 控制面板端口 (6006): 端口正在监听
+[✓] 控制面板端口 (9090): 端口正在监听
 
 ...
 
