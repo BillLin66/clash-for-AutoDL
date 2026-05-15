@@ -11,12 +11,15 @@ CONF_DIR="$(dirname "$0")/conf"
 CONFIG_FILE="$CONF_DIR/config.yaml"
 RAW_CONFIG_FILE="$CONF_DIR/config_raw.yaml"
 DECODED_CONFIG_FILE="$CONF_DIR/config_decoded.yaml"
+TEMPLATE_FILE="$CONF_DIR/template.yaml"
+INSERT_MARKER="# __CLASH_FOR_AUTODL_PROXIES__"
+PRIMARY_PROXY_GROUP="悠兔"
 
 # 代理计数器
 PROXY_COUNT=0
 DUPLICATE_COUNT=0
 
-# 临时文件用于重复名称处理
+# 临时文件用于重复名称处理，并作为生成代理组的代理名列表
 TEMP_NAME_FILE="/tmp/clash_proxy_names.tmp"
 
 # URL安全的base64解码函数
@@ -80,7 +83,7 @@ parse_ss() {
     fi
     
     # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -q "^$name$" "$TEMP_NAME_FILE"; then
+    if [ -f "$TEMP_NAME_FILE" ] && grep -Fxq "$name" "$TEMP_NAME_FILE"; then
         DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
         name="${name}-${DUPLICATE_COUNT}"
     fi
@@ -145,7 +148,7 @@ parse_ssr() {
     fi
     
     # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -q "^$name$" "$TEMP_NAME_FILE"; then
+    if [ -f "$TEMP_NAME_FILE" ] && grep -Fxq "$name" "$TEMP_NAME_FILE"; then
         DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
         name="${name}-${DUPLICATE_COUNT}"
     fi
@@ -225,7 +228,7 @@ parse_vless() {
     name=$(echo "$name" | sed 's/[[:space:]]*$//' | sed 's/[[:space:]]*$//')
     
     # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -q "^$name$" "$TEMP_NAME_FILE"; then
+    if [ -f "$TEMP_NAME_FILE" ] && grep -Fxq "$name" "$TEMP_NAME_FILE"; then
         DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
         name="${name}-${DUPLICATE_COUNT}"
     fi
@@ -307,7 +310,7 @@ except:
     fi
     
     # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -q "^$name$" "$TEMP_NAME_FILE"; then
+    if [ -f "$TEMP_NAME_FILE" ] && grep -Fxq "$name" "$TEMP_NAME_FILE"; then
         DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
         name="${name}-${DUPLICATE_COUNT}"
     fi
@@ -343,6 +346,62 @@ EOF
     PROXY_COUNT=$((PROXY_COUNT + 1))
 }
 
+# 智能引用代理名称，供转换器生成 proxy-groups 时使用
+format_proxy_name() {
+    local name="$1"
+    local escaped_name="${name//\'/\'\'}"
+
+    # 如果包含空格、冒号、短横线等特殊字符，则加引号以保持 YAML 稳定
+    if [[ "$name" =~ [[:space:]:-] ]]; then
+        echo "'$escaped_name'"
+    else
+        echo "$name"
+    fi
+}
+
+# 从解析出的代理名列表生成固定的代理组配置
+write_proxy_groups() {
+    local output_file="$1"
+    local formatted_names=""
+    local group_members=""
+
+    while IFS= read -r name; do
+        if [ -n "$name" ]; then
+            formatted_names="$formatted_names, $(format_proxy_name "$name")"
+        fi
+    done < "$TEMP_NAME_FILE"
+
+    formatted_names="${formatted_names#, }"
+
+    if [ -n "$formatted_names" ]; then
+        group_members="自动选择, 故障转移, $formatted_names"
+    else
+        group_members="DIRECT"
+        formatted_names="DIRECT"
+    fi
+
+    cat >> "$output_file" << EOF
+
+proxy-groups:
+    - { name: $PRIMARY_PROXY_GROUP, type: select, proxies: [$group_members] }
+    - { name: 自动选择, type: url-test, proxies: [$formatted_names], url: 'http://www.gstatic.com/generate_204', interval: 86400 }
+    - { name: 故障转移, type: fallback, proxies: [$formatted_names], url: 'http://www.gstatic.com/generate_204', interval: 7200 }
+EOF
+}
+
+# 模板负责维护规则；若模板规则末尾没有 MATCH，转换器自动补上主代理组兜底规则
+template_rules_end_with_match() {
+    awk '
+        /^rules:[[:space:]]*$/ { in_rules = 1; next }
+        in_rules && $0 !~ /^[[:space:]]*($|#)/ { last = $0 }
+        END {
+            gsub(/^[[:space:]]*-[[:space:]]*/, "", last)
+            gsub(/^['"'"']|['"'"']$/, "", last)
+            exit(index(last, "MATCH,") == 1 ? 0 : 1)
+        }
+    ' "$TEMPLATE_FILE"
+}
+
 # 主转换函数
 convert_subscription() {
     local input_file="$1"
@@ -369,38 +428,53 @@ convert_subscription() {
     
     # 检查文件是否是base64编码的订阅链接
     local temp_decoded="/tmp/decoded_subscription.txt"
-    if decode_base64_url "$(cat "$input_file")" > "$temp_decoded" 2>/dev/null && [ -s "$temp_decoded" ]; then
+    if decode_base64_url "$(cat "$input_file")" > "$temp_decoded" 2>/dev/null && \
+        grep -Eq '^(ss|ssr|vless|vmess)://' "$temp_decoded"; then
         echo -e "${YELLOW}检测到base64编码的订阅链接，进行解码...${NC}"
         input_file="$temp_decoded"
     fi
     
-    # 使用模板文件作为基础配置
-    local template_file="$CONF_DIR/template.yaml"
-    if [ -f "$template_file" ]; then
-        # 复制模板文件的头部（到注释行之前，但不包含注释行）
-        sed -n '1,/^# Proxies and proxy groups will be inserted here$/{ /^# Proxies and proxy groups will be inserted here$/!p }' "$template_file" > "$output_file"
-        echo "" >> "$output_file"
-        echo "proxies:" >> "$output_file"
-    else
-        # 如果没有模板文件，创建最基本的配置
-        cat > "$output_file" << 'EOF'
-port: 7890
-socks-port: 7891
-redir-port: 7892
-allow-lan: true
-mode: rule
-log-level: silent
-external-controller: '127.0.0.1:6006'
-
-proxies:
-EOF
+    # 模板负责基础设置和规则；转换器只在明确标记处生成代理节点和代理组
+    if [ ! -f "$TEMPLATE_FILE" ]; then
+        echo -e "${RED}错误：模板文件不存在 - $TEMPLATE_FILE${NC}"
+        rm -f "$TEMP_NAME_FILE" "$temp_decoded"
+        return 1
     fi
+    if ! grep -Fxq "$INSERT_MARKER" "$TEMPLATE_FILE"; then
+        echo -e "${RED}错误：模板缺少插入标记 - $INSERT_MARKER${NC}"
+        rm -f "$TEMP_NAME_FILE" "$temp_decoded"
+        return 1
+    fi
+    if ! grep -Eq '^rules:[[:space:]]*$' "$TEMPLATE_FILE"; then
+        echo -e "${RED}错误：模板缺少 rules: 规则段 - $TEMPLATE_FILE${NC}"
+        rm -f "$TEMP_NAME_FILE" "$temp_decoded"
+        return 1
+    fi
+
+    # 先写入同目录临时文件，全部生成成功后再替换目标文件，避免留下半成品配置
+    local output_dir
+    local output_base
+    local output_tmp
+    output_dir=$(dirname "$output_file")
+    output_base=$(basename "$output_file")
+    output_tmp=$(mktemp "$output_dir/.${output_base}.tmp.XXXXXX") || {
+        echo -e "${RED}错误：无法创建临时输出文件 - $output_dir${NC}"
+        rm -f "$TEMP_NAME_FILE" "$temp_decoded"
+        return 1
+    }
+
+    # 固定生成顺序 1/5：复制模板头部到插入点（不包含标记行）
+    awk -v marker="$INSERT_MARKER" '$0 == marker { exit } { print }' "$TEMPLATE_FILE" > "$output_tmp"
+    echo "" >> "$output_tmp"
+
+    # 固定生成顺序 2/5：写入 proxies:
+    echo "proxies:" >> "$output_tmp"
     
     # 创建临时文件存储未识别的协议
     local unrecognized_file="/tmp/unrecognized_protocols.txt"
     > "$unrecognized_file"
     
-    # 处理每一行
+    # 固定生成顺序 3/5：逐条写入解析出的代理节点
     while IFS= read -r line; do
         # 跳过空行和注释
         [ -z "$line" ] && continue
@@ -408,13 +482,13 @@ EOF
         
         # 检测协议类型并解析
         if [[ "$line" =~ ^ss:// ]]; then
-            parse_ss "$line" >> "$output_file"
+            parse_ss "$line" >> "$output_tmp"
         elif [[ "$line" =~ ^ssr:// ]]; then
-            parse_ssr "$line" >> "$output_file"
+            parse_ssr "$line" >> "$output_tmp"
         elif [[ "$line" =~ ^vless:// ]]; then
-            parse_vless "$line" >> "$output_file"
+            parse_vless "$line" >> "$output_tmp"
         elif [[ "$line" =~ ^vmess:// ]]; then
-            parse_vmess "$line" >> "$output_file"
+            parse_vmess "$line" >> "$output_tmp"
         else
             echo "# 未识别的协议: $line" >> "$unrecognized_file"
         fi
@@ -422,68 +496,28 @@ EOF
     
     # 在代理配置结束后添加未识别的协议注释
     if [ -s "$unrecognized_file" ]; then
-        echo "" >> "$output_file"
-        echo "# 未识别的协议列表:" >> "$output_file"
-        cat "$unrecognized_file" >> "$output_file"
-        echo "" >> "$output_file"
+        echo "" >> "$output_tmp"
+        echo "# 未识别的协议列表:" >> "$output_tmp"
+        cat "$unrecognized_file" >> "$output_tmp"
+        echo "" >> "$output_tmp"
     fi
     
     # 清理临时文件
     rm -f "$unrecognized_file"
     
-    # 添加代理组和规则（使用参考配置的格式）
-    if [ $PROXY_COUNT -gt 0 ]; then
-        # 提取所有代理名称
-        local proxy_names=$(grep -o "name: '[^']*'" "$output_file" | sed "s/name: '\\([^']*\\)'/\\1/")
-        
-        # 生成代理组配置（紧凑格式，符合参考配置）
-        echo "" >> "$output_file"
-        echo "proxy-groups:" >> "$output_file"
-        
-        # 函数：智能引用代理名称
-        format_proxy_name() {
-            local name="$1"
-            # 如果包含特殊字符，则引用
-            if [[ "$name" =~ [[:space:]:-] ]]; then
-                echo "'$name'"
-            else
-                echo "$name"
-            fi
-        }
-        
-        # 生成代理名称列表（智能引用）
-        local formatted_names=""
-        while IFS= read -r name; do
-            if [ -n "$name" ]; then
-                formatted_names="$formatted_names,$(format_proxy_name "$name")"
-            fi
-        done <<< "$proxy_names"
-        formatted_names="${formatted_names#,}"  # 移除开头的逗号
-        
-        # 从模板文件中提取代理组配置
-        local template_file="$CONF_DIR/template.yaml"
-        if [ -f "$template_file" ]; then
-            # 提取proxy-groups部分，并替换PROXY_NAMES占位符
-            sed -n '/^proxy-groups:/,/^rules:/p' "$template_file" | grep -v "^rules:" | sed "s/PROXY_NAMES/$formatted_names/g" >> "$output_file"
-        else
-            # 如果没有模板文件，使用硬编码的代理组（临时方案）
-            echo "    - { name: 悠兔, type: select, proxies: [自动选择, 故障转移, $formatted_names ] }" >> "$output_file"
-            echo "    - { name: 自动选择, type: url-test, proxies: [$formatted_names], url: 'http://www.gstatic.com/generate_204', interval: 86400 }" >> "$output_file"
-            echo "    - { name: 故障转移, type: fallback, proxies: [$formatted_names], url: 'http://www.gstatic.com/generate_204', interval: 7200 }" >> "$output_file"
-        fi
-        
-        # 添加模板文件的规则部分
-        local template_file="$CONF_DIR/template.yaml"
-        if [ -f "$template_file" ]; then
-            # 复制模板文件的规则部分（从rules:开始到文件结束）
-            sed -n '/^rules:/,$p' "$template_file" >> "$output_file"
-        else
-            # 如果没有模板文件，添加基本规则
-            echo "" >> "$output_file"
-            echo "rules:" >> "$output_file"
-            echo "    - 'GEOIP,CN,DIRECT'" >> "$output_file"
-            echo "    - 'MATCH,悠兔'" >> "$output_file"
-        fi
+    # 固定生成顺序 4/5：根据代理名列表生成 proxy-groups，不再从模板分段提取
+    write_proxy_groups "$output_tmp"
+
+    # 固定生成顺序 5/5：从模板复制 rules: 到文件末尾
+    sed -n '/^rules:[[:space:]]*$/,$p' "$TEMPLATE_FILE" >> "$output_tmp"
+    if ! template_rules_end_with_match; then
+        echo "    - 'MATCH,$PRIMARY_PROXY_GROUP'" >> "$output_tmp"
+    fi
+
+    if ! mv "$output_tmp" "$output_file"; then
+        echo -e "${RED}错误：无法写入输出文件 - $output_file${NC}"
+        rm -f "$output_tmp" "$TEMP_NAME_FILE" "$temp_decoded"
+        return 1
     fi
     
     # 清理临时文件
