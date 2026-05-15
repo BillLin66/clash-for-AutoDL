@@ -16,8 +16,113 @@ DECODED_CONFIG_FILE="$CONF_DIR/config_decoded.yaml"
 PROXY_COUNT=0
 DUPLICATE_COUNT=0
 
+# 主代理组名称
+MAIN_PROXY_GROUP="🚀 节点选择"
+AUTO_PROXY_GROUP="♻️ 自动选择"
+FALLBACK_PROXY_GROUP="🔯 故障转移"
+PROXY_TEST_URL="http://www.gstatic.com/generate_204"
+
+
 # 临时文件用于重复名称处理
 TEMP_NAME_FILE="/tmp/clash_proxy_names.tmp"
+
+
+# 将任意字符串格式化为 YAML 安全的双引号字符串
+yaml_quote() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '"%s"\n' "$value"
+}
+
+# 记录并返回去重后的代理名称，供代理组生成逻辑使用
+register_proxy_name() {
+    local name="$1"
+    local candidate="$name"
+    local suffix=1
+
+    while [ -f "$TEMP_NAME_FILE" ] && grep -Fxq "$candidate" "$TEMP_NAME_FILE"; do
+        candidate="${name}-${suffix}"
+        suffix=$((suffix + 1))
+    done
+
+    if [ "$candidate" != "$name" ]; then
+        DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
+    fi
+
+    echo "$candidate" >> "$TEMP_NAME_FILE"
+    printf '%s\n' "$candidate"
+}
+
+# 生成引用真实代理节点名称的完整代理组配置
+generate_proxy_groups() {
+    local output_file="$1"
+    local quoted_main quoted_auto quoted_fallback
+    quoted_main=$(yaml_quote "$MAIN_PROXY_GROUP")
+    quoted_auto=$(yaml_quote "$AUTO_PROXY_GROUP")
+    quoted_fallback=$(yaml_quote "$FALLBACK_PROXY_GROUP")
+
+    echo "" >> "$output_file"
+    echo "proxy-groups:" >> "$output_file"
+    cat >> "$output_file" << EOF
+  - name: $quoted_main
+    type: select
+    proxies:
+      - $quoted_auto
+      - $quoted_fallback
+EOF
+    while IFS= read -r name; do
+        [ -z "$name" ] && continue
+        echo "      - $(yaml_quote "$name")" >> "$output_file"
+    done < "$TEMP_NAME_FILE"
+
+    cat >> "$output_file" << EOF
+  - name: $quoted_auto
+    type: url-test
+    proxies:
+EOF
+    while IFS= read -r name; do
+        [ -z "$name" ] && continue
+        echo "      - $(yaml_quote "$name")" >> "$output_file"
+    done < "$TEMP_NAME_FILE"
+    cat >> "$output_file" << EOF
+    url: $PROXY_TEST_URL
+    interval: 86400
+  - name: $quoted_fallback
+    type: fallback
+    proxies:
+EOF
+    while IFS= read -r name; do
+        [ -z "$name" ] && continue
+        echo "      - $(yaml_quote "$name")" >> "$output_file"
+    done < "$TEMP_NAME_FILE"
+    cat >> "$output_file" << EOF
+    url: $PROXY_TEST_URL
+    interval: 7200
+EOF
+}
+
+# 追加规则，确保最终只有一个 rules: 段并以主代理组兜底规则结束
+append_rules() {
+    local output_file="$1"
+    local template_file="$2"
+
+    echo "" >> "$output_file"
+    if [ -f "$template_file" ]; then
+        awk -v main="$MAIN_PROXY_GROUP" '
+            BEGIN { in_rules = 0 }
+            /^rules:/ { in_rules = 1; print; next }
+            in_rules {
+                if ($0 ~ "MATCH," main) { next }
+                print
+            }
+        ' "$template_file" >> "$output_file"
+    else
+        echo "rules:" >> "$output_file"
+        echo "    - 'GEOIP,CN,DIRECT'" >> "$output_file"
+    fi
+    echo "    - 'MATCH,$MAIN_PROXY_GROUP'" >> "$output_file"
+}
 
 # URL安全的base64解码函数
 decode_base64_url() {
@@ -79,15 +184,11 @@ parse_ss() {
         fi
     fi
     
-    # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -q "^$name$" "$TEMP_NAME_FILE"; then
-        DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
-        name="${name}-${DUPLICATE_COUNT}"
-    fi
-    echo "$name" >> "$TEMP_NAME_FILE"
+    # 检查重复名称并记录成功解析的代理名称
+    name=$(register_proxy_name "$name")
     
     # 输出Clash格式配置（紧凑格式）
-    echo "    - { name: '$name', type: ss, server: $server, port: $port, cipher: $method, password: $password, udp: true }"
+    echo "  - { name: $(yaml_quote "$name"), type: ss, server: $(yaml_quote "$server"), port: $port, cipher: $(yaml_quote "$method"), password: $(yaml_quote "$password"), udp: true }"
     
     PROXY_COUNT=$((PROXY_COUNT + 1))
 }
@@ -144,16 +245,12 @@ parse_ssr() {
         name="$remarks"
     fi
     
-    # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -q "^$name$" "$TEMP_NAME_FILE"; then
-        DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
-        name="${name}-${DUPLICATE_COUNT}"
-    fi
-    echo "$name" >> "$TEMP_NAME_FILE"
+    # 检查重复名称并记录成功解析的代理名称
+    name=$(register_proxy_name "$name")
     
     # 输出Clash格式配置
     cat << EOF
-  - name: "$name"
+  - name: $(yaml_quote "$name")
     type: ssr
     server: $server
     port: $port
@@ -224,16 +321,12 @@ parse_vless() {
     # 清理名称中的空格和特殊字符
     name=$(echo "$name" | sed 's/[[:space:]]*$//' | sed 's/[[:space:]]*$//')
     
-    # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -q "^$name$" "$TEMP_NAME_FILE"; then
-        DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
-        name="${name}-${DUPLICATE_COUNT}"
-    fi
-    echo "$name" >> "$TEMP_NAME_FILE"
+    # 检查重复名称并记录成功解析的代理名称
+    name=$(register_proxy_name "$name")
     
     # 输出Clash格式配置
     cat << EOF
-  - name: "$name"
+  - name: $(yaml_quote "$name")
     type: vless
     server: $server
     port: $port
@@ -306,16 +399,12 @@ except:
         name="VMESS-${server}-${port}"
     fi
     
-    # 检查重复名称
-    if [ -f "$TEMP_NAME_FILE" ] && grep -q "^$name$" "$TEMP_NAME_FILE"; then
-        DUPLICATE_COUNT=$((DUPLICATE_COUNT + 1))
-        name="${name}-${DUPLICATE_COUNT}"
-    fi
-    echo "$name" >> "$TEMP_NAME_FILE"
+    # 检查重复名称并记录成功解析的代理名称
+    name=$(register_proxy_name "$name")
     
     # 输出Clash格式配置
     cat << EOF
-  - name: "$name"
+  - name: $(yaml_quote "$name")
     type: vmess
     server: $server
     port: $port
@@ -369,7 +458,9 @@ convert_subscription() {
     
     # 检查文件是否是base64编码的订阅链接
     local temp_decoded="/tmp/decoded_subscription.txt"
-    if decode_base64_url "$(cat "$input_file")" > "$temp_decoded" 2>/dev/null && [ -s "$temp_decoded" ]; then
+    if decode_base64_url "$(cat "$input_file")" > "$temp_decoded" 2>/dev/null \
+        && [ -s "$temp_decoded" ] \
+        && grep -Eq '^(ss|ssr|vless|vmess)://' "$temp_decoded"; then
         echo -e "${YELLOW}检测到base64编码的订阅链接，进行解码...${NC}"
         input_file="$temp_decoded"
     fi
@@ -431,61 +522,12 @@ EOF
     # 清理临时文件
     rm -f "$unrecognized_file"
     
-    # 添加代理组和规则（使用参考配置的格式）
+    # 添加脚本生成的完整代理组和模板规则
     if [ $PROXY_COUNT -gt 0 ]; then
-        # 提取所有代理名称
-        local proxy_names=$(grep -o "name: '[^']*'" "$output_file" | sed "s/name: '\\([^']*\\)'/\\1/")
-        
-        # 生成代理组配置（紧凑格式，符合参考配置）
-        echo "" >> "$output_file"
-        echo "proxy-groups:" >> "$output_file"
-        
-        # 函数：智能引用代理名称
-        format_proxy_name() {
-            local name="$1"
-            # 如果包含特殊字符，则引用
-            if [[ "$name" =~ [[:space:]:-] ]]; then
-                echo "'$name'"
-            else
-                echo "$name"
-            fi
-        }
-        
-        # 生成代理名称列表（智能引用）
-        local formatted_names=""
-        while IFS= read -r name; do
-            if [ -n "$name" ]; then
-                formatted_names="$formatted_names,$(format_proxy_name "$name")"
-            fi
-        done <<< "$proxy_names"
-        formatted_names="${formatted_names#,}"  # 移除开头的逗号
-        
-        # 从模板文件中提取代理组配置
-        local template_file="$CONF_DIR/template.yaml"
-        if [ -f "$template_file" ]; then
-            # 提取proxy-groups部分，并替换PROXY_NAMES占位符
-            sed -n '/^proxy-groups:/,/^rules:/p' "$template_file" | grep -v "^rules:" | sed "s/PROXY_NAMES/$formatted_names/g" >> "$output_file"
-        else
-            # 如果没有模板文件，使用硬编码的代理组（临时方案）
-            echo "    - { name: 悠兔, type: select, proxies: [自动选择, 故障转移, $formatted_names ] }" >> "$output_file"
-            echo "    - { name: 自动选择, type: url-test, proxies: [$formatted_names], url: 'http://www.gstatic.com/generate_204', interval: 86400 }" >> "$output_file"
-            echo "    - { name: 故障转移, type: fallback, proxies: [$formatted_names], url: 'http://www.gstatic.com/generate_204', interval: 7200 }" >> "$output_file"
-        fi
-        
-        # 添加模板文件的规则部分
-        local template_file="$CONF_DIR/template.yaml"
-        if [ -f "$template_file" ]; then
-            # 复制模板文件的规则部分（从rules:开始到文件结束）
-            sed -n '/^rules:/,$p' "$template_file" >> "$output_file"
-        else
-            # 如果没有模板文件，添加基本规则
-            echo "" >> "$output_file"
-            echo "rules:" >> "$output_file"
-            echo "    - 'GEOIP,CN,DIRECT'" >> "$output_file"
-            echo "    - 'MATCH,悠兔'" >> "$output_file"
-        fi
+        generate_proxy_groups "$output_file"
+        append_rules "$output_file" "$CONF_DIR/template.yaml"
     fi
-    
+
     # 清理临时文件
     rm -f "$TEMP_NAME_FILE"
     rm -f "$temp_decoded"
