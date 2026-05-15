@@ -20,6 +20,16 @@ dns:
     nameserver: ['https://223.6.6.6/dns-query', 'https://120.53.53.53/dns-query', 'tls://223.5.5.5:853']
 
 # Proxies and proxy groups will be inserted here
+# INSERTION POINT CONTRACT:
+# - converter.sh copies the template header above this marker.
+# - converter.sh writes the generated `proxies:` and full `proxy-groups:` sections here.
+# - converter.sh then appends exactly one `rules:` section from below.
+#
+# Proxy group templates referenced by converter.sh; `PROXY_NAMES` means the
+# actual proxy names parsed from the subscription, not a static placeholder.
+#   - { name: 🚀 节点选择, type: select, proxies: [♻️ 自动选择, 🔯 故障转移, PROXY_NAMES] }
+#   - { name: ♻️ 自动选择, type: url-test, proxies: [PROXY_NAMES], url: http://www.gstatic.com/generate_204, interval: 86400 }
+#   - { name: 🔯 故障转移, type: fallback, proxies: [PROXY_NAMES], url: http://www.gstatic.com/generate_204, interval: 7200 }
 
 rules:
     - 'DOMAIN-SUFFIX,steamcontent.com,DIRECT'
@@ -49,3 +59,4 @@ rules:
     - 'IP-CIDR,185.25.182.0/23,DIRECT'
     - 'IP-CIDR,208.78.164.0/22,DIRECT'
     - 'GEOIP,CN,DIRECT'
+    - 'MATCH,🚀 节点选择'
