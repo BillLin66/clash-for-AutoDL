@@ -301,21 +301,39 @@ parse_vmess() {
     
     # 使用python解析JSON（如果可用）
     if command -v python3 >/dev/null 2>&1; then
-        local parsed=$(python3 -c "
+        local parsed
+        parsed=$(python3 -c '
 import json
+import sys
 try:
-    data = json.loads('$decoded')
-    print(f\"{data.get('add', '')},{data.get('port', '')},{data.get('id', '')},{data.get('aid', '0')},{data.get('net', 'tcp')},{data.get('type', 'none')},{data.get('host', '')},{data.get('path', '')},{data.get('tls', '')},{data.get('ps', '')},{data.get('scy', 'auto')}\")
-except:
-    print('ERROR')
-")
+    data = json.load(sys.stdin)
+    def get(key, default=""):
+        value = data.get(key, default)
+        return "" if value is None else str(value)
+    fields = [
+        get("add", ""),
+        get("port", ""),
+        get("id", ""),
+        get("aid", "0"),
+        get("net", "tcp"),
+        get("type", "none"),
+        get("host", ""),
+        get("path", ""),
+        get("tls", ""),
+        get("ps", ""),
+        get("scy", "auto"),
+    ]
+    print("\t".join(fields))
+except Exception:
+    print("ERROR")
+' <<< "$decoded")
         
         if [ "$parsed" = "ERROR" ]; then
             echo "# Failed to parse VMESS JSON"
             return 1
         fi
         
-        IFS=',' read -r server port uuid aid network type host path tls name cipher <<< "$parsed"
+        IFS=$'\t' read -r server port uuid aid network type host path tls name cipher <<< "$parsed"
     else
         echo "# Python3 not available for VMESS parsing"
         return 1
@@ -364,12 +382,8 @@ format_proxy_name() {
     local name="$1"
     local escaped_name="${name//\'/\'\'}"
 
-    # 如果包含空格、冒号、短横线等特殊字符，则加引号以保持 YAML 稳定
-    if [[ "$name" =~ [[:space:]:-] ]]; then
-        echo "'$escaped_name'"
-    else
-        echo "$name"
-    fi
+    # 始终使用单引号包裹，避免逗号/括号/空格等字符破坏 YAML flow sequence 语法
+    echo "'$escaped_name'"
 }
 
 # 从解析出的代理名列表生成固定的代理组配置
